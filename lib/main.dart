@@ -1,13 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart'  as intl;
+import 'package:intl/intl.dart' as intl;
 
 import 'ble_obd_service.dart';
 import 'history_repository.dart';
 import 'models.dart';
 import 'obd_protocol.dart';
-
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -65,21 +64,23 @@ class _ObdScannerAppState extends State<ObdScannerApp> {
   }
 
   ThemeData _darkTheme() {
+    const primaryColor = Color(0xFF06B6D4); // Cyan Accent
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
       colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFFFFC107),
+        seedColor: primaryColor,
         brightness: Brightness.dark,
+        surface: const Color(0xFF1E293B),
       ),
-      scaffoldBackgroundColor: const Color(0xFF0B1220),
-      cardTheme: const CardThemeData(
-        color: Color(0xFF111827),
+      scaffoldBackgroundColor: const Color(0xFF0F172A),
+      cardTheme: CardThemeData(
+        color: const Color(0xFF1E293B),
         elevation: 0,
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(20)),
-          side: BorderSide(color: Color(0xFF2A3345), width: 1),
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFF334155), width: 1),
         ),
       ),
       appBarTheme: const AppBarTheme(
@@ -89,39 +90,42 @@ class _ObdScannerAppState extends State<ObdScannerApp> {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: const Color(0xFF111827),
+        fillColor: const Color(0xFF0F172A),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFF2A3345)),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF334155)),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFF2A3345)),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF334155)),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFFFC107)),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: primaryColor, width: 1.5),
         ),
       ),
     );
   }
 
   ThemeData _lightTheme() {
+    const primaryColor = Color(0xFF0284C7); // Light Cyan/Blue Accent
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.light,
       colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFFFFC107),
+        seedColor: primaryColor,
         brightness: Brightness.light,
+        surface: Colors.white,
       ),
-      scaffoldBackgroundColor: const Color(0xFFF8FAFC),
-      cardTheme: const CardThemeData(
+      scaffoldBackgroundColor: const Color(0xFFF1F5F9),
+      cardTheme: CardThemeData(
         color: Colors.white,
         elevation: 0,
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(20)),
-          side: BorderSide(color: Color(0xFFE2E8F0), width: 1),
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFFE2E8F0), width: 1),
         ),
       ),
       appBarTheme: const AppBarTheme(
@@ -132,17 +136,18 @@ class _ObdScannerAppState extends State<ObdScannerApp> {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: const Color(0xFFF8FAFC),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFF59E0B)),
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: primaryColor, width: 1.5),
         ),
       ),
     );
@@ -158,9 +163,9 @@ class SplashScreen extends StatelessWidget {
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFFFFD54F), Color(0xFFF59E0B), Color(0xFF0F172A)],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
           ),
         ),
         child: Center(
@@ -178,32 +183,39 @@ class SplashScreen extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  width: 126,
-                  height: 126,
+                  width: 120,
+                  height: 120,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.18),
-                    borderRadius: BorderRadius.circular(32),
-                    border: Border.all(color: Colors.white.withOpacity(0.4), width: 1.5),
+                    color: const Color(0xFF06B6D4).withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(28),
+                    border: Border.all(color: const Color(0xFF06B6D4).withOpacity(0.4), width: 1.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF06B6D4).withOpacity(0.15),
+                        blurRadius: 30,
+                        spreadRadius: 5,
+                      ),
+                    ],
                   ),
-                  child: const Icon(Icons.directions_car_filled_rounded, size: 64, color: Colors.white),
+                  child: const Icon(Icons.directions_car_filled_rounded, size: 60, color: Color(0xFF22D3EE)),
                 ),
-                const SizedBox(height: 22),
+                const SizedBox(height: 24),
                 const Text(
                   'OBD Scanner',
                   style: TextStyle(
-                    fontSize: 34,
-                    fontWeight: FontWeight.w800,
+                    fontSize: 32,
+                    fontWeight: FontWeight.w900,
                     color: Colors.white,
                     letterSpacing: 0.5,
                   ),
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'فحص السيارات عبر BLE',
+                  'نظام التشخيص الفني للسيارات عبر BLE',
                   style: TextStyle(
-                    color: Color(0xFFF8FAFC),
-                    fontSize: 16,
-                    letterSpacing: 0.3,
+                    color: Color(0xFF94A3B8),
+                    fontSize: 14,
+                    letterSpacing: 0.2,
                   ),
                 ),
               ],
@@ -409,164 +421,282 @@ class _ObdHomePageState extends State<ObdHomePage> {
   String _statusLabel() {
     switch (_status) {
       case ObdConnectionStatus.scanning:
-        return 'جارٍ البحث عن الأجهزة';
+        return 'جارٍ البحث...';
       case ObdConnectionStatus.connecting:
-        return 'جارٍ الاتصال';
+        return 'جارٍ الاتصال...';
       case ObdConnectionStatus.connected:
-        return 'متصل';
+        return 'متصل بالجهاز';
       case ObdConnectionStatus.error:
-        return 'خطأ في الاتصال';
+        return 'خطأ بالاتصال';
       case ObdConnectionStatus.disconnected:
         return 'غير متصل';
     }
   }
 
-  Color _statusColor(BuildContext context) => _connected ? Colors.green : Theme.of(context).colorScheme.outline;
+  Color _statusColor(BuildContext context) {
+    switch (_status) {
+      case ObdConnectionStatus.connected:
+        return const Color(0xFF10B981); // Emerald
+      case ObdConnectionStatus.connecting:
+      case ObdConnectionStatus.scanning:
+        return const Color(0xFF06B6D4); // Cyan
+      case ObdConnectionStatus.error:
+        return const Color(0xFFEF4444); // Red
+      case ObdConnectionStatus.disconnected:
+        return Theme.of(context).brightness == Brightness.dark ? const Color(0xFF64748B) : const Color(0xFF94A3B8);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = widget.themeMode == ThemeMode.dark;
-    final backgroundTop = isDark ? const Color(0xFF0B1220) : const Color(0xFFF8FAFC);
-    final backgroundBottom = isDark ? const Color(0xFF111827) : const Color(0xFFE2E8F0);
+    final primaryColor = Theme.of(context).colorScheme.primary;
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
       appBar: AppBar(
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.directions_car_filled_rounded, size: 20),
-            const SizedBox(width: 8),
-            const Text('فاحص OBD للسيارات'),
+            Icon(Icons.minor_crash_rounded, color: primaryColor, size: 24),
+            const SizedBox(width: 10),
+            const Text('منصة التشخيص OBD', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
           ],
         ),
-        flexibleSpace: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFFFFD54F), Color(0xFFF59E0B)],
-            ),
-          ),
-        ),
+        centerTitle: false,
         actions: [
           IconButton(
-            tooltip: 'تبديل الوضع',
+            tooltip: 'تبديل المظهر',
             onPressed: widget.onToggleTheme,
             icon: Icon(widget.themeMode == ThemeMode.dark ? Icons.light_mode_rounded : Icons.dark_mode_rounded),
           ),
-          Padding(
-            padding: const EdgeInsets.only(left: 8.0),
-            child: IconButton(
-              tooltip: 'تحديث الأجهزة',
-              onPressed: _status == ObdConnectionStatus.scanning ? null : _scan,
-              icon: const Icon(Icons.refresh_rounded),
-            ),
+          IconButton(
+            tooltip: 'تحديث الأجهزة',
+            onPressed: _status == ObdConnectionStatus.scanning ? null : _scan,
+            icon: const Icon(Icons.refresh_rounded),
           ),
+          const SizedBox(width: 8),
         ],
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [backgroundTop, backgroundBottom],
-          ),
-        ),
-        child: SafeArea(
-          child: SingleChildScrollView(
-            controller: _scrollController,
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildConnectionCard(context),
-                const SizedBox(height: 12),
-                if (_error != null) _buildErrorCard(context),
-                _buildQuickActions(context),
-                const SizedBox(height: 12),
-                _buildManualCommandCard(context),
-                const SizedBox(height: 12),
-                _buildResultsCard(context),
-                const SizedBox(height: 12),
-                _buildHistoryCard(context),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_error != null) ...[
+                _buildErrorCard(context),
+                const SizedBox(height: 16),
               ],
-            ),
+              
+              // 1. Bluetooth Connection Section
+              _buildSectionHeader(
+                context,
+                title: 'إدارة الاتصال (Bluetooth)',
+                subtitle: 'البحث عن أجهزة OBD2 وربط التطبيق',
+                icon: Icons.bluetooth_searching_rounded,
+              ),
+              const SizedBox(height: 8),
+              _buildConnectionCard(context),
+              const SizedBox(height: 20),
+
+              // 2. Quick Commands Section
+              _buildSectionHeader(
+                context,
+                title: 'الأوامر التشخيصية السريعة',
+                subtitle: 'قراءة المؤشرات والأعطال بنقرة واحدة',
+                icon: Icons.speed_rounded,
+              ),
+              const SizedBox(height: 8),
+              _buildQuickActions(context),
+              const SizedBox(height: 20),
+
+              // 3. Manual Terminal Commands Section
+              _buildSectionHeader(
+                context,
+                title: 'المنفذ اليدوي (Terminal)',
+                subtitle: 'إرسال أوامر ELM327 مخصصة وتلقي الرد المباشر',
+                icon: Icons.terminal_rounded,
+              ),
+              const SizedBox(height: 8),
+              _buildManualCommandCard(context),
+              const SizedBox(height: 20),
+
+              // 4. Results Section
+              _buildSectionHeader(
+                context,
+                title: 'نتائج وقراءات الفحص',
+                subtitle: 'عرض بيانات الحساسات وأكواد الأعطال الحالية',
+                icon: Icons.analytics_rounded,
+              ),
+              const SizedBox(height: 8),
+              _buildResultsCard(context),
+              const SizedBox(height: 20),
+
+              // 5. History Logs Section
+              _buildSectionHeader(
+                context,
+                title: 'سجل العمليات السابق',
+                subtitle: 'الأوامر المسجلة ونتائج التشخيص السابقة',
+                icon: Icons.history_rounded,
+                action: _history.isNotEmpty
+                    ? TextButton.icon(
+                        onPressed: () async {
+                          await _historyRepository.clear();
+                          if (mounted) setState(() => _history = <InspectionRecord>[]);
+                        },
+                        icon: const Icon(Icons.delete_outline_rounded, size: 18, color: Colors.redAccent),
+                        label: const Text('مسح السجل', style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                      )
+                    : null,
+              ),
+              const SizedBox(height: 8),
+              _buildHistoryCard(context),
+              const SizedBox(height: 24),
+            ],
           ),
         ),
       ),
     );
   }
 
+  Widget _buildSectionHeader(
+    BuildContext context, {
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    Widget? action,
+  }) {
+    final primaryColor = Theme.of(context).colorScheme.primary;
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: primaryColor.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: primaryColor, size: 20),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (action != null) action,
+      ],
+    );
+  }
+
   Widget _buildConnectionCard(BuildContext context) {
+    final primaryColor = Theme.of(context).colorScheme.primary;
+    final statusCol = _statusColor(context);
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: _statusColor(context).withOpacity(0.14),
-                    borderRadius: BorderRadius.circular(12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: statusCol.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: statusCol.withOpacity(0.2)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _connected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
+                    color: statusCol,
+                    size: 22,
                   ),
-                  child: Icon(Icons.bluetooth_connected_rounded, color: _statusColor(context)),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'اتصال Bluetooth / BLE',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _statusLabel(),
+                          style: TextStyle(fontWeight: FontWeight.bold, color: statusCol, fontSize: 14),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _service.connectedDevice == null
+                              ? 'لم يتم الاتصال بأي جهاز حالياً'
+                              : 'الجهاز: ${_service.connectedDevice!.platformName.isEmpty ? _service.connectedDevice!.remoteId : _service.connectedDevice!.platformName}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFFCBD5E1) : const Color(0xFF475569),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-                Chip(
-                  avatar: Icon(Icons.circle, size: 12, color: _statusColor(context)),
-                  label: Text(_statusLabel()),
-                  backgroundColor: _statusColor(context).withOpacity(0.12),
-                  side: BorderSide(color: _statusColor(context).withOpacity(0.3)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              _service.connectedDevice == null
-                  ? 'ابحث عن جميع الأجهزة القريبة، حتى لو لم تكن متوافقة مع Freematics. أهم شيء هو اسم الجهاز القريب.'
-                  : 'الجهاز الحالي: ${_service.connectedDevice!.platformName.isEmpty ? _service.connectedDevice!.remoteId : _service.connectedDevice!.platformName}',
-              style: const TextStyle(color: Color(0xFFE5E7EB), height: 1.5),
+                  if (_connected)
+                    IconButton(
+                      tooltip: 'فصل الجهاز',
+                      onPressed: _busy ? null : _disconnect,
+                      icon: const Icon(Icons.power_settings_new_rounded, color: Colors.redAccent),
+                    ),
+                ],
+              ),
             ),
             const SizedBox(height: 14),
-            FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFFFC107),
-                foregroundColor: const Color(0xFF111827),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-              ),
-              onPressed: _busy || _status == ObdConnectionStatus.scanning ? null : _scan,
-              icon: const Icon(Icons.search_rounded),
-              label: Text(_status == ObdConnectionStatus.scanning ? 'جارٍ البحث...' : 'البحث عن الأجهزة القريبة'),
-            ),
-            if (_connected) ...[
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Color(0xFF2A3345)),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+            SizedBox(
+              height: 48,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: primaryColor,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 0,
                 ),
-                onPressed: _busy ? null : _disconnect,
-                icon: const Icon(Icons.bluetooth_disabled_rounded),
-                label: const Text('فصل الجهاز'),
+                onPressed: _busy || _status == ObdConnectionStatus.scanning ? null : _scan,
+                icon: _status == ObdConnectionStatus.scanning
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.search_rounded, size: 20),
+                label: Text(
+                  _status == ObdConnectionStatus.scanning ? 'جارٍ البحث عن الأجهزة...' : 'البحث عن الأجهزة القريبة',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
               ),
-            ],
+            ),
             if (_devices.isNotEmpty) ...[
-              const Divider(height: 24, color: Color(0xFF2A3345)),
-              Text('الأجهزة المكتشفة (${_devices.length})', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('الأجهزة المكتشفة', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  Text('${_devices.length} أجهزة', style: TextStyle(color: primaryColor, fontSize: 12, fontWeight: FontWeight.w600)),
+                ],
+              ),
               const SizedBox(height: 8),
-              ..._devices.map((item) => _buildDeviceTile(context, item)),
+              ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _devices.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) => _buildDeviceTile(context, _devices[index]),
+              ),
             ],
           ],
         ),
@@ -576,62 +706,75 @@ class _ObdHomePageState extends State<ObdHomePage> {
 
   Widget _buildDeviceTile(BuildContext context, DiscoveredObdDevice item) {
     final isFreematics = item.name.toLowerCase().contains('freematics');
-    final compatibilityText = isFreematics ? 'متوافق مع Freematics' : 'غير متوافق - يظهر فقط كجهاز BLE قريب';
-    final accentColor = isFreematics ? Colors.blue : item.rssi > -70 ? Colors.green : Colors.orange;
+    final primaryColor = Theme.of(context).colorScheme.primary;
 
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0.85, end: 1),
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeOutCubic,
-      builder: (context, value, child) {
-        return Transform.scale(
-          scale: value,
-          child: Opacity(
-            opacity: value,
-            child: child,
-          ),
-        );
-      },
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        decoration: BoxDecoration(
-          color: accentColor.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: accentColor.withOpacity(0.35)),
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isFreematics ? primaryColor.withOpacity(0.5) : const Color(0xFF334155).withOpacity(0.3),
         ),
-        child: ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          leading: Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: accentColor.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(isFreematics ? Icons.car_repair : Icons.bluetooth_searching, color: accentColor),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        leading: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: isFreematics ? primaryColor.withOpacity(0.15) : Colors.grey.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(10),
           ),
-          title: Text(item.name, style: TextStyle(color: accentColor, fontWeight: FontWeight.w700)),
-          subtitle: Text('${item.id}  •  RSSI ${item.rssi} dBm  •  $compatibilityText'),
-          trailing: FilledButton(
-            onPressed: _busy ? null : () => _connect(item),
-            child: const Text('اتصال'),
+          child: Icon(
+            isFreematics ? Icons.directions_car_rounded : Icons.bluetooth_rounded,
+            color: isFreematics ? primaryColor : Colors.grey,
+            size: 22,
           ),
+        ),
+        title: Text(
+          item.name.isEmpty ? 'جهاز غير معروف' : item.name,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+        ),
+        subtitle: Text(
+          '${item.id}  •  ${item.rssi} dBm',
+          style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+        ),
+        trailing: OutlinedButton(
+          style: OutlinedButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            side: BorderSide(color: primaryColor),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          onPressed: _busy ? null : () => _connect(item),
+          child: const Text('اتصال', style: TextStyle(fontSize: 12)),
         ),
       ),
     );
   }
 
   Widget _buildErrorCard(BuildContext context) {
-    return Card(
-      color: const Color(0xFF2F1D1D),
-      child: ListTile(
-        leading: const Icon(Icons.error_outline, color: Color(0xFFFFA726)),
-        title: const Text('تنبيه', style: TextStyle(color: Colors.white)),
-        subtitle: Text(_error!, style: const TextStyle(color: Color(0xFFE5E7EB))),
-        trailing: IconButton(
-          onPressed: () => setState(() => _error = null),
-          icon: const Icon(Icons.close, color: Colors.white),
-        ),
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEF4444).withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: Color(0xFFEF4444), size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              _error!,
+              style: const TextStyle(color: Color(0xFFEF4444), fontSize: 13, fontWeight: FontWeight.w500),
+            ),
+          ),
+          GestureDetector(
+            onTap: () => setState(() => _error = null),
+            child: const Icon(Icons.close_rounded, color: Color(0xFFEF4444), size: 18),
+          ),
+        ],
       ),
     );
   }
@@ -640,27 +783,98 @@ class _ObdHomePageState extends State<ObdHomePage> {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return GridView.count(
+              crossAxisCount: constraints.maxWidth > 500 ? 3 : 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: 2.3,
+              children: [
+                _quickActionButton(
+                  context,
+                  label: 'كشف الأعطال DTC',
+                  icon: Icons.warning_amber_rounded,
+                  color: const Color(0xFFF59E0B),
+                  onTap: _readDtc,
+                ),
+                _quickActionButton(
+                  context,
+                  label: 'رقم الهيكل VIN',
+                  icon: Icons.fingerprint_rounded,
+                  color: const Color(0xFF3B82F6),
+                  onTap: _readVin,
+                ),
+                _quickActionButton(
+                  context,
+                  label: 'حرارة المحرك',
+                  icon: Icons.thermostat_rounded,
+                  color: const Color(0xFFEF4444),
+                  onTap: () => _readPid(0x05, 'قراءة حرارة المحرك'),
+                ),
+                _quickActionButton(
+                  context,
+                  label: 'دوران المحرك RPM',
+                  icon: Icons.speed_rounded,
+                  color: const Color(0xFF10B981),
+                  onTap: () => _readPid(0x0C, 'قراءة دوران المحرك'),
+                ),
+                _quickActionButton(
+                  context,
+                  label: 'مسح الأكواد DTC',
+                  icon: Icons.delete_sweep_rounded,
+                  color: const Color(0xFF6366F1),
+                  onTap: _clearDtc,
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _quickActionButton(
+    BuildContext context, {
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: _busy ? null : onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.2)),
+        ),
+        child: Row(
           children: [
-            Row(
-              children: [
-                const Icon(Icons.flash_on_rounded, color: Color(0xFFFFC107)),
-                const SizedBox(width: 8),
-                Expanded(child: Text('الأوامر السريعة', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700))),
-              ],
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, color: color, size: 18),
             ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _quickButton('كشف الأعطال DTC', Icons.warning_amber, _readDtc),
-                _quickButton('رقم الهيكل VIN', Icons.confirmation_number, _readVin),
-                _quickButton('حرارة المحرك', Icons.thermostat, () => _readPid(0x05, 'قراءة حرارة المحرك')),
-                _quickButton('دوران المحرك RPM', Icons.speed, () => _readPid(0x0C, 'قراءة دوران المحرك')),
-                _quickButton('مسح الأكواد', Icons.delete_sweep, _clearDtc),
-              ],
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                  color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1E293B),
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),
@@ -668,19 +882,9 @@ class _ObdHomePageState extends State<ObdHomePage> {
     );
   }
 
-  Widget _quickButton(String label, IconData icon, VoidCallback onPressed) {
-    return OutlinedButton.icon(
-      style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: Color(0xFF2A3345)),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      ),
-      onPressed: _busy ? null : onPressed,
-      icon: Icon(icon, color: const Color(0xFFFFC107)),
-      label: Text(label),
-    );
-  }
-
   Widget _buildManualCommandCard(BuildContext context) {
+    final primaryColor = Theme.of(context).colorScheme.primary;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -689,34 +893,33 @@ class _ObdHomePageState extends State<ObdHomePage> {
           children: [
             Row(
               children: [
-                const Icon(Icons.terminal_rounded, color: Color(0xFFFFC107)),
-                const SizedBox(width: 8),
-                Expanded(child: Text('إرسال أمر يدوي', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700))),
-              ],
-            ),
-            const SizedBox(height: 8),
-            const Text('أدخل الأمر بصيغة ELM327، مثل 010C أو 03. سيضيف التطبيق CR تلقائياً.', style: TextStyle(color: Color(0xFFE5E7EB))),
-            const SizedBox(height: 12),
-            Row(
-              children: [
                 Expanded(
                   child: TextField(
                     controller: _manualCommandController,
                     textDirection: TextDirection.ltr,
                     textCapitalization: TextCapitalization.characters,
-                    decoration: const InputDecoration(hintText: '010C'),
+                    style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold),
+                    decoration: const InputDecoration(
+                      hintText: 'مثال: 010C أو 03',
+                      prefixIcon: Icon(Icons.code_rounded, size: 20),
+                    ),
                     onSubmitted: (_) => _sendManualCommand(),
                   ),
                 ),
-                const SizedBox(width: 8),
-                FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFFFFC107),
-                    foregroundColor: const Color(0xFF111827),
+                const SizedBox(width: 10),
+                SizedBox(
+                  height: 48,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: primaryColor,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 0,
+                    ),
+                    onPressed: _busy ? null : _sendManualCommand,
+                    icon: const Icon(Icons.send_rounded, size: 18),
+                    label: const Text('إرسال'),
                   ),
-                  onPressed: _busy ? null : _sendManualCommand,
-                  icon: const Icon(Icons.send),
-                  label: const Text('إرسال'),
                 ),
               ],
             ),
@@ -727,135 +930,225 @@ class _ObdHomePageState extends State<ObdHomePage> {
   }
 
   Widget _buildResultsCard(BuildContext context) {
+    final primaryColor = Theme.of(context).colorScheme.primary;
+    final hasData = _vin != null || _dtcCodes.isNotEmpty || _liveReadings.isNotEmpty || _lastResponse.isNotEmpty;
+
+    if (!hasData) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            children: [
+              Icon(Icons.query_stats_rounded, size: 40, color: Theme.of(context).hintColor.withOpacity(0.4)),
+              const SizedBox(height: 12),
+              const Text(
+                'لا توجد نتائج فحص حتى الآن',
+                style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF94A3B8)),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'قم بتنفيذ أحد الأوامر السريعة أو اليدوية لعرض البيانات هنا',
+                style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                const Icon(Icons.analytics_rounded, color: Color(0xFFFFC107)),
-                const SizedBox(width: 8),
-                Expanded(child: Text('نتائج الفحص', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700))),
-              ],
-            ),
-            const SizedBox(height: 12),
-            if (_vin != null) _resultRow('VIN', _vin!, Icons.confirmation_number),
-            if (_dtcCodes.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text('أكواد الأعطال (${_dtcCodes.length})', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 4),
-              ..._dtcCodes.map((code) => ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.warning, color: Colors.orange),
-                    title: Text(code, textDirection: TextDirection.ltr),
-                    subtitle: const Text('كود تشخيصي يحتاج إلى تفسير حسب السيارة والأعراض.'),
-                  )),
-            ] else if (_lastResponse.isNotEmpty && _dtcCodes.isEmpty)
-              _resultRow('DTC', 'لم يتم العثور على أكواد أو راجع الرد الخام أدناه.', Icons.check_circle_outline),
-            ..._liveReadings.values.map((reading) => _resultRow(reading.label, reading.displayValue, Icons.analytics)),
-            const SizedBox(height: 8),
-            Theme(
-              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-              child: ExpansionTile(
-                tilePadding: EdgeInsets.zero,
-                title: const Text('الرد الخام الأخير'),
-                iconColor: const Color(0xFFFFC107),
-                collapsedIconColor: const Color(0xFFFFFFFF),
-                children: [
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: SelectableText(_lastResponse.isEmpty ? 'لا توجد بيانات بعد.' : _lastResponse, textDirection: TextDirection.ltr),
-                  ),
-                ],
+            if (_vin != null) ...[
+              _buildMetricTile(
+                context,
+                title: 'رقم الهيكل VIN',
+                value: _vin!,
+                icon: Icons.fingerprint_rounded,
+                color: const Color(0xFF3B82F6),
               ),
-            ),
+              const SizedBox(height: 10),
+            ],
+            if (_dtcCodes.isNotEmpty) ...[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEF4444).withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.2)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.warning_amber_rounded, color: Color(0xFFEF4444), size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'أكواد الأعطال المكتشفة (${_dtcCodes.length})',
+                          style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFEF4444)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _dtcCodes
+                          .map((code) => Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEF4444),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  code,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                              ))
+                          .toList(),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+            ..._liveReadings.values.map((reading) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _buildMetricTile(
+                    context,
+                    title: reading.label,
+                    value: reading.displayValue,
+                    icon: Icons.bar_chart_rounded,
+                    color: primaryColor,
+                  ),
+                )),
+            if (_lastResponse.isNotEmpty)
+              Theme(
+                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  title: const Text('الاستجابة الخام (Raw Output)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  iconColor: primaryColor,
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: SelectableText(
+                        _lastResponse,
+                        textDirection: TextDirection.ltr,
+                        style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
     );
   }
 
-  Widget _resultRow(String label, String value, IconData icon) {
+  Widget _buildMetricTile(
+    BuildContext context, {
+    required String title,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF111827),
+        color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF2A3345)),
+        border: Border.all(color: const Color(0xFF334155).withOpacity(0.2)),
       ),
       child: Row(
         children: [
-          Icon(icon, color: const Color(0xFFFFC107)),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
           const SizedBox(width: 12),
-          Expanded(child: Text(label)),
-          Text(value, textDirection: TextDirection.ltr, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+          Expanded(
+            child: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+          ),
+          Text(
+            value,
+            textDirection: TextDirection.ltr,
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: color),
+          ),
         ],
       ),
     );
   }
 
   Widget _buildHistoryCard(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.history_rounded, color: Color(0xFFFFC107)),
-                const SizedBox(width: 8),
-                Expanded(child: Text('سجل الفحوصات', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700))),
-                if (_history.isNotEmpty)
-                  TextButton(
-                    onPressed: () async {
-                      await _historyRepository.clear();
-                      if (mounted) setState(() => _history = <InspectionRecord>[]);
-                    },
-                    child: const Text('مسح السجل', style: TextStyle(color: Color(0xFFFFC107))),
-                  ),
-              ],
+    if (_history.isEmpty) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: Text(
+              'لا توجد فحوصات محفوظة في السجل',
+              style: TextStyle(color: Theme.of(context).hintColor, fontSize: 13),
             ),
-            const SizedBox(height: 8),
-            if (_history.isEmpty)
-              const Text('لا توجد فحوصات محفوظة بعد.', style: TextStyle(color: Color(0xFFE5E7EB)))
-            else
-              ..._history.take(10).map((record) => Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF111827),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFF2A3345)),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(record.success ? Icons.check_circle : Icons.error, color: record.success ? Colors.green : Colors.red),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(record.title, style: const TextStyle(fontWeight: FontWeight.w600)),
-                              const SizedBox(height: 4),
-                              Text(intl.DateFormat('yyyy-MM-dd HH:mm').format(record.createdAt), style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        SizedBox(
-                          width: 140,
-                          child: Text(record.result, maxLines: 2, overflow: TextOverflow.ellipsis, textDirection: TextDirection.ltr, textAlign: TextAlign.left),
-                        ),
-                      ],
-                    ),
-                  )),
-          ],
+          ),
         ),
+      );
+    }
+
+    return Card(
+      child: ListView.separated(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: _history.take(8).length,
+        separatorBuilder: (_, __) => const Divider(height: 1, indent: 16, endIndent: 16),
+        itemBuilder: (context, index) {
+          final record = _history[index];
+          final statusColor = record.success ? const Color(0xFF10B981) : const Color(0xFFEF4444);
+
+          return ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            leading: Icon(
+              record.success ? Icons.check_circle_outline_rounded : Icons.highlight_off_rounded,
+              color: statusColor,
+              size: 22,
+            ),
+            title: Text(record.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+            subtitle: Text(
+              intl.DateFormat('yyyy/MM/dd - hh:mm a').format(record.createdAt),
+              style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+            ),
+            trailing: SizedBox(
+              width: 120,
+              child: Text(
+                record.result,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textDirection: TextDirection.ltr,
+                textAlign: TextAlign.left,
+                style: const TextStyle(fontSize: 12, fontFamily: 'monospace', fontWeight: FontWeight.w600),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
