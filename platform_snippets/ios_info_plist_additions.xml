@@ -1,0 +1,3 @@
+<!-- أضف هذا المفتاح داخل dict في ios/Runner/Info.plist -->
+<key>NSBluetoothAlwaysUsageDescription</key>
+<string>يستخدم التطبيق Bluetooth للاتصال بجهاز فحص السيارة وقراءة بيانات OBD.</string>
