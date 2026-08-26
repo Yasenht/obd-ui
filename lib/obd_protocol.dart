@@ -1,5 +1,4 @@
 import 'dart:convert';
-
 import 'models.dart';
 
 /// أوامر OBD القياسية التي يرسلها التطبيق كنص ASCII إلى خاصية FFE1.
@@ -124,7 +123,6 @@ class ObdParser {
     final bytes = hexBytes(response);
     final markerIndex = _indexOf(bytes, const [0x49, 0x02, 0x01]);
     if (markerIndex < 0) throw const ObdProtocolException('رد VIN غير مكتمل.');
-
     final vinBytes = bytes.sublist(markerIndex + 3);
     final vin = ascii.decode(vinBytes.where((byte) => byte >= 0x20 && byte <= 0x7E).toList(), allowInvalid: true);
     final cleaned = vin.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
