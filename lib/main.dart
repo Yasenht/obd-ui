@@ -1,13 +1,12 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' as intl;
-
 import 'ble_obd_service.dart';
 import 'history_repository.dart';
 import 'models.dart';
+import 'ObdHttpService.dart'; //
 import 'obd_protocol.dart';
-
+import 'obd_analysis_api.dart';
+import 'dart:async';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const ObdScannerApp());
@@ -50,16 +49,16 @@ class _ObdScannerAppState extends State<ObdScannerApp> {
       darkTheme: _darkTheme(),
       home: _showSplash
           ? const Directionality(
-              textDirection: TextDirection.rtl,
-              child: SplashScreen(),
-            )
+        textDirection: TextDirection.rtl,
+        child: SplashScreen(),
+      )
           : Directionality(
-              textDirection: TextDirection.rtl,
-              child: ObdHomePage(
-                themeMode: _themeMode,
-                onToggleTheme: _toggleTheme,
-              ),
-            ),
+        textDirection: TextDirection.rtl,
+        child: ObdHomePage(
+          themeMode: _themeMode,
+          onToggleTheme: _toggleTheme,
+        ),
+      ),
     );
   }
 
@@ -211,7 +210,7 @@ class SplashScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'نظام التشخيص الفني للسيارات عبر BLE',
+                  'نظام التشخيص الفني للسيارات عبر BLE / Wi-Fi',
                   style: TextStyle(
                     color: Color(0xFF94A3B8),
                     fontSize: 14,
@@ -243,21 +242,32 @@ class ObdHomePage extends StatefulWidget {
 
 class _ObdHomePageState extends State<ObdHomePage> {
   final _service = BleObdService();
+  final _httpService = ObdHttpService();
+  final _analysisApi = ObdAnalysisApi();
   final _historyRepository = HistoryRepository();
   final _manualCommandController = TextEditingController();
   final _scrollController = ScrollController();
 
   StreamSubscription<List<DiscoveredObdDevice>>? _scanSubscription;
   StreamSubscription<ObdConnectionStatus>? _statusSubscription;
+  StreamSubscription<String>? _debugLogSubscription;
+
+  final List<String> _debugLogs = <String>[];
   List<DiscoveredObdDevice> _devices = <DiscoveredObdDevice>[];
   List<InspectionRecord> _history = <InspectionRecord>[];
   Map<int, PidReading> _liveReadings = <int, PidReading>{};
   List<String> _dtcCodes = <String>[];
+  bool _hasReadDtc = false;
   ObdConnectionStatus _status = ObdConnectionStatus.disconnected;
   String _lastResponse = '';
   String? _vin;
   String? _error;
   bool _busy = false;
+  bool _apiLoading = false;
+  Map<String, dynamic>? _lastApiAnalysis;
+  String? _apiError;
+  String _lastApiCommand = '';
+  String _lastApiRawResponse = '';
 
   bool get _connected => _status == ObdConnectionStatus.connected;
 
@@ -270,8 +280,25 @@ class _ObdHomePageState extends State<ObdHomePage> {
     _statusSubscription = _service.status.listen((status) {
       if (mounted) setState(() => _status = status);
     });
+    _debugLogSubscription = _service.debugLogs.listen((message) {
+      if (!mounted) return;
+
+      setState(() {
+        _debugLogs.add(message);
+
+        // الاحتفاظ بآخر 200 رسالة فقط
+        if (_debugLogs.length > 200) {
+          _debugLogs.removeAt(0);
+        }
+      });
+    });
     unawaited(_requestRequiredPermissions());
     _loadHistory();
+
+    // 3. بدء سحب البيانات عبر HTTP تلقائياً عند إقلاع الواجهة
+    _httpService.startPolling(
+      interval: const Duration(milliseconds: 500),
+    );
   }
 
   Future<void> _requestRequiredPermissions() async {
@@ -291,8 +318,13 @@ class _ObdHomePageState extends State<ObdHomePage> {
 
   @override
   void dispose() {
+    // 4. إيقاف سحب HTTP وتنظيف الموارد
+    _httpService.stopPolling();
+    _httpService.dispose();
+
     _scanSubscription?.cancel();
     _statusSubscription?.cancel();
+    _debugLogSubscription?.cancel();
     _manualCommandController.dispose();
     _scrollController.dispose();
     _service.dispose();
@@ -336,7 +368,7 @@ class _ObdHomePageState extends State<ObdHomePage> {
       _error = null;
     });
     try {
-      final response = await _service.sendCommand(command, timeout: timeout ?? const Duration(seconds: 4));
+      final response = await _service.sendCommand(command, timeout: timeout ?? const Duration(seconds: 10));
       if (mounted) {
         setState(() => _lastResponse = response.trim());
         await _saveRecord(
@@ -345,6 +377,36 @@ class _ObdHomePageState extends State<ObdHomePage> {
           success: !ObdParser.isError(response),
           rawResponse: response,
         );
+      }
+
+      
+      final apiCommand = command.replaceAll(RegExp(r'[\r\n>]'), '').trim().toUpperCase();
+      final cleanedResponse = response.replaceAll(RegExp(r'[\r\n>]'), ' ').trim();
+    final apiResponse = ObdParser.toRawObdResponse(apiCommand, cleanedResponse);
+    _log('API SEND: command=$apiCommand response=$apiResponse');
+      if (apiCommand.isNotEmpty &&
+          !apiCommand.startsWith('AT') &&
+          apiResponse.isNotEmpty &&
+          !ObdParser.isError(response)) {
+        if (mounted) {
+          setState(() {
+            _apiLoading = true;
+            _apiError = null;
+            _lastApiCommand = apiCommand;
+            _lastApiRawResponse = apiResponse;
+          });
+        }
+        try {
+          final analysis = await _analysisApi.analyzeCommand(
+            command: apiCommand,
+            response: apiResponse,
+          );
+          if (mounted) setState(() => _lastApiAnalysis = analysis);
+        } catch (error) {
+          if (mounted) setState(() => _apiError = 'تعذر تحليل الرد عبر API: $error');
+        } finally {
+          if (mounted) setState(() => _apiLoading = false);
+        }
       }
       return response;
     } catch (error) {
@@ -355,19 +417,33 @@ class _ObdHomePageState extends State<ObdHomePage> {
     }
   }
 
-  Future<void> _readDtc() async {
-    final response = await _execute('قراءة أكواد الأعطال DTC', ObdCommands.readDtc, timeout: const Duration(seconds: 10));
+  Future<void> _readBattery() async {
+    final response = await _execute(
+      'قراءة جهد البطارية',
+      ObdCommands.battery,
+      timeout: const Duration(seconds: 10),
+    );
+
     if (response == null) return;
-    try {
-      final codes = ObdParser.parseDtc(response);
-      if (mounted) setState(() => _dtcCodes = codes);
-    } catch (error) {
-      if (mounted) setState(() => _error = '$error');
+
+    final voltage = double.tryParse(response.trim());
+
+    if (voltage == null) {
+      if (mounted) {
+        setState(() => _error = 'تعذرت قراءة جهد البطارية: $response');
+      }
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _error = '';
+      });
     }
   }
 
   Future<void> _readVin() async {
-    final response = await _execute('قراءة رقم الهيكل VIN', ObdCommands.readVin, timeout: const Duration(seconds: 10));
+    final response = await _execute('قراءة رقم الهيكل ', ObdCommands.readVin, timeout: const Duration(seconds: 10));
     if (response == null) return;
     try {
       final vin = ObdParser.parseVin(response);
@@ -377,27 +453,81 @@ class _ObdHomePageState extends State<ObdHomePage> {
     }
   }
 
+  void _log(String message) {
+    debugPrint(message);
+  }
+
+
+Future<void> _readDtc(int pid, String title) async {
+  final response = await _execute(title,
+      ObdCommands.readDtc,);
+  _log('DTC raw response: ${response ?? "NULL"}');
+  if (response == null) return;
+
+  final codes = ObdParser.parseDtc(response);
+  _log('DTC parsed: $codes');
+
+  if (mounted) {
+    setState(() {
+      _dtcCodes = codes;
+      _hasReadDtc = true;
+    });
+  }
+}
   Future<void> _readPid(int pid, String title) async {
-    final response = await _execute(title, ObdCommands.readPid(pid));
+    _log('READ PID START: $pid');
+    final response = await _execute(
+      title,
+      ObdCommands.readPid(pid),
+    );
+    _log('READ PID RESPONSE: ${response ?? "NULL"}');
     if (response == null) return;
+
+    _log('PID: 0x${pid.toRadixString(16).toUpperCase()}');
+    _log('PID raw response: ${response.trim()}');
+
     try {
-      final reading = ObdParser.parsePid(pid: pid, response: response);
-      if (mounted) setState(() => _liveReadings = {..._liveReadings, pid: reading});
+      final reading = ObdParser.parsePid(
+        pid: pid,
+        response: response,
+      );
+
+      _log('PID parsed value: ${reading.value} ${reading.unit}');
+
+      if (mounted) {
+        setState(() {
+          _liveReadings = {
+            ..._liveReadings,
+            pid: reading,
+          };
+        });
+      }
     } catch (error) {
-      if (mounted) setState(() => _error = '$error');
+      _log('PID parsing error: $error');
+
+      if (mounted) {
+        setState(() => _error = '$error');
+      }
     }
   }
 
   Future<void> _sendManualCommand() async {
     final typed = _manualCommandController.text.trim();
-    if (typed.isEmpty) return;
-    final command = typed.endsWith('\r') ? typed : '$typed\r';
-    await _execute('أمر يدوي: $typed', command);
+    if (typed.isEmpty || _busy) return;
+
+    final normalized = typed.toUpperCase().trim();
+
+    if (normalized == '010C') {
+      await _readPid(0x0C, 'دوران المحرك');
+      return;
+    }
+    else if (normalized == '03') {
+    await _readDtc(0x03, 'قراءة أكواد الأعطال');
+    return;
   }
 
-  Future<void> _clearDtc() async {
-    final response = await _execute('مسح أكواد الأعطال', ObdCommands.clearDtc, timeout: const Duration(seconds: 10));
-    if (response != null && mounted) setState(() => _dtcCodes = <String>[]);
+    final command = typed.endsWith('\r') ? typed : '$typed\r';
+    await _execute('أمر يدوي: $typed', command);
   }
 
   Future<void> _saveRecord({
@@ -487,7 +617,7 @@ class _ObdHomePageState extends State<ObdHomePage> {
                 _buildErrorCard(context),
                 const SizedBox(height: 16),
               ],
-              
+
               // 1. Bluetooth Connection Section
               _buildSectionHeader(
                 context,
@@ -496,7 +626,71 @@ class _ObdHomePageState extends State<ObdHomePage> {
                 icon: Icons.bluetooth_searching_rounded,
               ),
               const SizedBox(height: 8),
+
               _buildConnectionCard(context),
+              const SizedBox(height: 12),
+
+              _buildSectionHeader(
+                context,
+                title: 'سجل تشخيص Bluetooth',
+                subtitle: 'تفاصيل الاتصال والخدمات والخصائص',
+                icon: Icons.terminal_rounded,
+              ),
+              const SizedBox(height: 8),
+
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'BLE Debug Log',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'مسح السجل',
+                            onPressed: () {
+                              setState(() => _debugLogs.clear());
+                            },
+                            icon: const Icon(Icons.delete_outline),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        height: 200,
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: _debugLogs.isEmpty
+                            ? const Text(
+                          'لم تصل رسائل بعد. اضغط اتصال بجهاز BLE.',
+                          style: TextStyle(color: Colors.white70),
+                        )
+                            : SingleChildScrollView(
+                          child: SelectableText(
+                            _debugLogs.join('\n\n'),
+                            textDirection: TextDirection.ltr,
+                            style: const TextStyle(
+                              color: Colors.greenAccent,
+                              fontSize: 11,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
               const SizedBox(height: 20),
 
               // 2. Quick Commands Section
@@ -508,6 +702,8 @@ class _ObdHomePageState extends State<ObdHomePage> {
               ),
               const SizedBox(height: 8),
               _buildQuickActions(context),
+              const SizedBox(height: 8),
+              _buildDtcCard(context),
               const SizedBox(height: 20),
 
               // 3. Manual Terminal Commands Section
@@ -521,15 +717,25 @@ class _ObdHomePageState extends State<ObdHomePage> {
               _buildManualCommandCard(context),
               const SizedBox(height: 20),
 
-              // 4. Results Section
+              // 4. Results & Wi-Fi Live Stream Section
               _buildSectionHeader(
                 context,
-                title: 'نتائج وقراءات الفحص',
-                subtitle: 'عرض بيانات الحساسات وأكواد الأعطال الحالية',
-                icon: Icons.analytics_rounded,
+                title: 'نتائج وقراءات الفحص الحية (Wi-Fi / HTTP)',
+                subtitle: 'عرض بيانات الحساسات الحية المجمعة عبر السيرفر',
+                icon: Icons.wifi_tethering_rounded,
               ),
               const SizedBox(height: 8),
               _buildResultsCard(context),
+              const SizedBox(height: 20),
+
+              _buildSectionHeader(
+                context,
+                title: 'تحليل رد جهاز OBD',
+                subtitle: 'تحليل الأمر والرد عبر API وعرض التشخيص',
+                icon: Icons.health_and_safety_rounded,
+              ),
+              const SizedBox(height: 8),
+              _buildApiAnalysisCard(context),
               const SizedBox(height: 20),
 
               // 5. History Logs Section
@@ -540,13 +746,13 @@ class _ObdHomePageState extends State<ObdHomePage> {
                 icon: Icons.history_rounded,
                 action: _history.isNotEmpty
                     ? TextButton.icon(
-                        onPressed: () async {
-                          await _historyRepository.clear();
-                          if (mounted) setState(() => _history = <InspectionRecord>[]);
-                        },
-                        icon: const Icon(Icons.delete_outline_rounded, size: 18, color: Colors.redAccent),
-                        label: const Text('مسح السجل', style: TextStyle(color: Colors.redAccent, fontSize: 12)),
-                      )
+                  onPressed: () async {
+                    await _historyRepository.clear();
+                    if (mounted) setState(() => _history = <InspectionRecord>[]);
+                  },
+                  icon: const Icon(Icons.delete_outline_rounded, size: 18, color: Colors.redAccent),
+                  label: const Text('مسح السجل', style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                )
                     : null,
               ),
               const SizedBox(height: 8),
@@ -560,12 +766,12 @@ class _ObdHomePageState extends State<ObdHomePage> {
   }
 
   Widget _buildSectionHeader(
-    BuildContext context, {
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    Widget? action,
-  }) {
+      BuildContext context, {
+        required String title,
+        required String subtitle,
+        required IconData icon,
+        Widget? action,
+      }) {
     final primaryColor = Theme.of(context).colorScheme.primary;
     return Row(
       children: [
@@ -669,10 +875,10 @@ class _ObdHomePageState extends State<ObdHomePage> {
                 onPressed: _busy || _status == ObdConnectionStatus.scanning ? null : _scan,
                 icon: _status == ObdConnectionStatus.scanning
                     ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
                     : const Icon(Icons.search_rounded, size: 20),
                 label: Text(
                   _status == ObdConnectionStatus.scanning ? 'جارٍ البحث عن الأجهزة...' : 'البحث عن الأجهزة القريبة',
@@ -736,7 +942,7 @@ class _ObdHomePageState extends State<ObdHomePage> {
           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
         ),
         subtitle: Text(
-          '${item.id}  •  ${item.rssi} dBm',
+          '${item.id} | ${item.rssi} dBm',
           style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
         ),
         trailing: OutlinedButton(
@@ -766,13 +972,17 @@ class _ObdHomePageState extends State<ObdHomePage> {
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              _error!,
-              style: const TextStyle(color: Color(0xFFEF4444), fontSize: 13, fontWeight: FontWeight.w500),
+              _error ?? '',
+              style: const TextStyle(
+                color: Color(0xFFEF4444),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
-          GestureDetector(
-            onTap: () => setState(() => _error = null),
-            child: const Icon(Icons.close_rounded, color: Color(0xFFEF4444), size: 18),
+          IconButton(
+            icon: const Icon(Icons.close_rounded, size: 18, color: Color(0xFFEF4444)),
+            onPressed: () => setState(() => _error = null),
           ),
         ],
       ),
@@ -780,110 +990,56 @@ class _ObdHomePageState extends State<ObdHomePage> {
   }
 
   Widget _buildQuickActions(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            return GridView.count(
-              crossAxisCount: constraints.maxWidth > 500 ? 3 : 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
-              childAspectRatio: 2.3,
-              children: [
-                _quickActionButton(
-                  context,
-                  label: 'كشف الأعطال DTC',
-                  icon: Icons.warning_amber_rounded,
-                  color: const Color(0xFFF59E0B),
-                  onTap: _readDtc,
-                ),
-                _quickActionButton(
-                  context,
-                  label: 'رقم الهيكل VIN',
-                  icon: Icons.fingerprint_rounded,
-                  color: const Color(0xFF3B82F6),
-                  onTap: _readVin,
-                ),
-                _quickActionButton(
-                  context,
-                  label: 'حرارة المحرك',
-                  icon: Icons.thermostat_rounded,
-                  color: const Color(0xFFEF4444),
-                  onTap: () => _readPid(0x05, 'قراءة حرارة المحرك'),
-                ),
-                _quickActionButton(
-                  context,
-                  label: 'دوران المحرك RPM',
-                  icon: Icons.speed_rounded,
-                  color: const Color(0xFF10B981),
-                  onTap: () => _readPid(0x0C, 'قراءة دوران المحرك'),
-                ),
-                _quickActionButton(
-                  context,
-                  label: 'مسح الأكواد DTC',
-                  icon: Icons.delete_sweep_rounded,
-                  color: const Color(0xFF6366F1),
-                  onTap: _clearDtc,
-                ),
-              ],
-            );
-          },
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _buildActionButton(
+          title: 'دوران المحرك (RPM)',
+          icon: Icons.speed_rounded,
+          onPressed: _busy ? null : () => _readPid(0x0C, 'دوران المحرك'),
         ),
-      ),
+        _buildActionButton(
+          title: 'جهد البطارية',
+          icon: Icons.battery_charging_full_rounded,
+          onPressed: _busy ? null : _readBattery,
+        ),
+        _buildActionButton(
+          title: 'رقم الهيكل (VIN)',
+          icon: Icons.fingerprint_rounded,
+          onPressed: _busy ? null : _readVin,
+        ),
+        _buildActionButton(
+          title: 'أكواد الأعطال (DTC)',
+          icon: Icons.error_outline_rounded,
+          onPressed: _busy ? null : () => _readDtc(0x03, 'قراءة أكواد الأعطال'),
+        ),
+      ],
     );
   }
 
-  Widget _quickActionButton(
-    BuildContext context, {
-    required String label,
+  Widget _buildActionButton({
+    required String title,
     required IconData icon,
-    required Color color,
-    required VoidCallback onTap,
+    required VoidCallback? onPressed,
   }) {
-    return InkWell(
-      onTap: _busy ? null : onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.2)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(icon, color: color, size: 18),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                  color: Theme.of(context).brightness == Brightness.dark ? Colors.white : const Color(0xFF1E293B),
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
+    return ElevatedButton.icon(
+      style: ElevatedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
+      onPressed: onPressed,
+      icon: Icon(icon, size: 18),
+      label: Text(title, style: const TextStyle(fontSize: 13)),
     );
   }
 
-  Widget _buildManualCommandCard(BuildContext context) {
+  Widget _buildDtcCard(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    const errorColor = Color(0xFFEF4444); // Red
+    const successColor = Color(0xFF10B981); // Emerald
     final primaryColor = Theme.of(context).colorScheme.primary;
+    final mutedColor = dark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
 
     return Card(
       child: Padding(
@@ -893,35 +1049,136 @@ class _ObdHomePageState extends State<ObdHomePage> {
           children: [
             Row(
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _manualCommandController,
-                    textDirection: TextDirection.ltr,
-                    textCapitalization: TextCapitalization.characters,
-                    style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold),
-                    decoration: const InputDecoration(
-                      hintText: 'مثال: 010C أو 03',
-                      prefixIcon: Icon(Icons.code_rounded, size: 20),
-                    ),
-                    onSubmitted: (_) => _sendManualCommand(),
-                  ),
+                Icon(
+                  _dtcCodes.isNotEmpty
+                      ? Icons.error_rounded
+                      : (_hasReadDtc ? Icons.verified_rounded : Icons.published_with_changes_rounded),
+                  color: _dtcCodes.isEmpty ? (_hasReadDtc ? successColor : mutedColor) : errorColor,
+                  size: 22,
                 ),
                 const SizedBox(width: 10),
-                SizedBox(
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: primaryColor,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      elevation: 0,
+                Expanded(
+                  child: Text(
+                    _dtcCodes.isEmpty
+                        ? (_hasReadDtc ? 'لا توجد أكواد أعطال مسجلة' : 'لم تُقرأ أكواد الأعطال بعد')
+                        : '${_dtcCodes.length} ${_dtcCodes.length == 1 ? 'كود عطل مكتشف' : 'أكواد أعطال مكتشفة'}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      color: _dtcCodes.isEmpty
+                          ? (_hasReadDtc ? successColor : mutedColor)
+                          : errorColor,
                     ),
-                    onPressed: _busy ? null : _sendManualCommand,
-                    icon: const Icon(Icons.send_rounded, size: 18),
-                    label: const Text('إرسال'),
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+            if (_dtcCodes.isNotEmpty)
+              ..._dtcCodes.map((code) => _buildDtcTile(context, code, errorColor))
+            else
+              Text(
+                _hasReadDtc
+                    ? 'وحدة التحكم لا تُبلغ عن أي أعطال حالياً.'
+                    : 'اضغط زر «أكواد الأعطال (DTC)» أعلاه أو أدخل الأمر 03 في المنفذ اليدوي لقراءة الأكواد المكتشفة.',
+                style: TextStyle(fontSize: 12, color: mutedColor, height: 1.5),
+                textDirection: TextDirection.rtl,
+              ),
+            if (_dtcCodes.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'الحرف الأول من الكود يدل على النظام: P المحرك، C الشاسي، B هيكل السيارة، U الشبكة والاتصالات.',
+                style: TextStyle(fontSize: 11, color: primaryColor.withOpacity(0.8)),
+                textDirection: TextDirection.rtl,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDtcTile(BuildContext context, String code, Color color) {
+    String system;
+    switch (code.isNotEmpty ? code[0] : '') {
+      case 'P':
+        system = 'المحرك / ناقل الحركة';
+        break;
+      case 'C':
+        system = 'الشاسي';
+        break;
+      case 'B':
+        system = 'هيكل السيارة';
+        break;
+      case 'U':
+        system = 'الشبكة والاتصالات';
+        break;
+      default:
+        system = 'نظام غير معروف';
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: ListTile(
+        dense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        leading: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(Icons.warning_amber_rounded, color: color, size: 20),
+        ),
+        title: Text(
+          code,
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.bold,
+            fontSize: 15,
+          ),
+          textDirection: TextDirection.ltr,
+        ),
+        subtitle: Text(
+          system,
+          style: TextStyle(
+            fontSize: 11,
+            color: Theme.of(context).brightness == Brightness.dark
+                ? const Color(0xFF94A3B8)
+                : const Color(0xFF64748B),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildManualCommandCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _manualCommandController,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  hintText: 'أدخل الأمر مثل: 010C أو BATT',
+                  isDense: true,
+                ),
+                onSubmitted: (_) => _sendManualCommand(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton(
+              onPressed: _busy ? null : _sendManualCommand,
+              child: const Text('إرسال'),
             ),
           ],
         ),
@@ -929,30 +1186,46 @@ class _ObdHomePageState extends State<ObdHomePage> {
     );
   }
 
-  Widget _buildResultsCard(BuildContext context) {
-    final primaryColor = Theme.of(context).colorScheme.primary;
-    final hasData = _vin != null || _dtcCodes.isNotEmpty || _liveReadings.isNotEmpty || _lastResponse.isNotEmpty;
+  Widget _buildApiAnalysisCard(BuildContext context) {
+    final analysis = _lastApiAnalysis;
+    final values = analysis?['values'] is Map
+        ? Map<String, dynamic>.from(analysis!['values'] as Map)
+        : <String, dynamic>{};
+    final dtcs = analysis?['dtcs'] is List
+        ? (analysis!['dtcs'] as List).map((e) => e.toString()).toList()
+        : <String>[];
+    final confidence = analysis?['confidence'];
+    final severity = analysis?['severity']?.toString();
+    final status = analysis?['status']?.toString();
 
-    if (!hasData) {
-      return Card(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            children: [
-              Icon(Icons.query_stats_rounded, size: 40, color: Theme.of(context).hintColor.withOpacity(0.4)),
-              const SizedBox(height: 12),
-              const Text(
-                'لا توجد نتائج فحص حتى الآن',
-                style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF94A3B8)),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                'قم بتنفيذ أحد الأوامر السريعة أو اليدوية لعرض البيانات هنا',
-                style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
+    String label(String? value) {
+      switch (value?.toLowerCase()) {
+        case 'warning': return 'تحذير';
+        case 'error': return 'خطأ';
+        case 'critical': return 'حرج';
+        case 'high': return 'مرتفع';
+        case 'medium': return 'متوسط';
+        case 'low': return 'منخفض';
+        case 'info': return 'معلومات';
+        case 'success': return 'سليم';
+        default: return value ?? 'غير محدد';
+      }
+    }
+
+    Widget detail(String title, dynamic value, {IconData? icon}) {
+      if (value == null || value.toString().trim().isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (icon != null) ...[Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary), const SizedBox(width: 8)],
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 3),
+              Text(value.toString()),
+            ])),
+          ],
         ),
       );
     }
@@ -960,196 +1233,166 @@ class _ObdHomePageState extends State<ObdHomePage> {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (_vin != null) ...[
-              _buildMetricTile(
-                context,
-                title: 'رقم الهيكل VIN',
-                value: _vin!,
-                icon: Icons.fingerprint_rounded,
-                color: const Color(0xFF3B82F6),
-              ),
-              const SizedBox(height: 10),
-            ],
-            if (_dtcCodes.isNotEmpty) ...[
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEF4444).withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.2)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.warning_amber_rounded, color: Color(0xFFEF4444), size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          'أكواد الأعطال المكتشفة (${_dtcCodes.length})',
-                          style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFEF4444)),
-                        ),
-                      ],
-                    ),
+        child: _apiLoading && analysis == null
+            ? const Center(child: Padding(
+                padding: EdgeInsets.all(18),
+                child: Column(children: [CircularProgressIndicator(), SizedBox(height: 12), Text('جارٍ إرسال الرد إلى خدمة التحليل...')]),
+              ))
+            : _apiError != null && analysis == null
+                ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Icon(Icons.cloud_off_rounded, color: Colors.orangeAccent, size: 30),
                     const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: _dtcCodes
-                          .map((code) => Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFEF4444),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  code,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontFamily: 'monospace',
-                                  ),
-                                ),
-                              ))
-                          .toList(),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-            ],
-            ..._liveReadings.values.map((reading) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _buildMetricTile(
-                    context,
-                    title: reading.label,
-                    value: reading.displayValue,
-                    icon: Icons.bar_chart_rounded,
-                    color: primaryColor,
-                  ),
-                )),
-            if (_lastResponse.isNotEmpty)
-              Theme(
-                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-                child: ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  title: const Text('الاستجابة الخام (Raw Output)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                  iconColor: primaryColor,
-                  children: [
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: SelectableText(
-                        _lastResponse,
-                        textDirection: TextDirection.ltr,
-                        style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
+                    Text(_apiError!, style: const TextStyle(color: Colors.orangeAccent)),
+                    if (_lastApiCommand.isNotEmpty) Text('الأمر: $_lastApiCommand\nالرد: $_lastApiRawResponse'),
+                  ])
+                : analysis == null
+                    ? const Text('أرسل أمر OBD بعد الاتصال بالجهاز لعرض التحليل هنا.')
+                    : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        if (_apiLoading) const LinearProgressIndicator(),
+                        Row(children: [
+                          const Icon(Icons.analytics_rounded, color: Colors.cyanAccent, size: 28),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text(analysis['title']?.toString() ?? 'نتيجة التحليل', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold))),
+                        ]),
+                        const SizedBox(height: 12),
+                        Wrap(spacing: 8, runSpacing: 8, children: [
+                          Chip(label: Text('الحالة: ${label(status)}')),
+                          Chip(label: Text('الخطورة: ${label(severity)}')),
+                          if (confidence is num) Chip(label: Text('الثقة: ${(confidence * 100).toStringAsFixed(0)}%')),
+                        ]),
+                        const Divider(height: 24),
+                        detail('شرح التحليل', analysis['explanation'], icon: Icons.info_outline),
+                        detail('المشكلة المحتملة', analysis['problem'], icon: Icons.warning_amber_rounded),
+                        detail('التوصية', analysis['recommendation'], icon: Icons.build_circle_outlined),
+                        if (values.isNotEmpty) detail('القيم المستخرجة', values.entries.map((e) => '${e.key}: ${e.value}').join(' | '), icon: Icons.sensors),
+                        if (dtcs.isNotEmpty) detail('رموز الأعطال (DTC)', dtcs.join(', '), icon: Icons.error_outline),
+                        if (dtcs.isEmpty) detail('رموز الأعطال (DTC)', 'لم تُرجع الخدمة رموز أعطال.'),
+                        const Divider(height: 20),
+                        Text('الأمر: $_lastApiCommand', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                        const SizedBox(height: 4),
+                        Text('رد الجهاز: $_lastApiRawResponse', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                        if (_apiError != null) Padding(padding: const EdgeInsets.only(top: 8), child: Text(_apiError!, style: const TextStyle(color: Colors.orangeAccent))),
+                      ]),
       ),
     );
   }
 
-  Widget _buildMetricTile(
-    BuildContext context, {
-    required String title,
-    required String value,
-    required IconData icon,
-    required Color color,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).brightness == Brightness.dark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF334155).withOpacity(0.2)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: color, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-          ),
-          Text(
-            value,
-            textDirection: TextDirection.ltr,
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: color),
-          ),
-        ],
+  // 5. كارت النتائج المدمج بـ StreamBuilder لـ ObdHttpService
+  Widget _buildResultsCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: StreamBuilder<ObdLiveData>(
+          stream: _httpService.dataStream,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Column(
+                    children: [
+                      SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(height: 12),
+                      Text(
+                        'جاري الاتصال بـ Freematics Wi-Fi واستقبال البيانات الحية...',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            if (snapshot.hasError) {
+              return Text(
+                'تنبيه HTTP: تأكد من اتصال هاتفك بشبكة Wi-Fi الخاصة بـ Freematics.\n${snapshot.error}',
+                style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+              );
+            }
+
+            if (snapshot.hasData) {
+              final data = snapshot.data!;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'رقم الشاسي (VIN): ${data.vin}',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      Text(
+                        'البطارية: ${data.batteryVoltage.toStringAsFixed(2)} V',
+                        style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 20),
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.speed_rounded, color: Colors.cyanAccent),
+                    title: const Text('دوران المحرك (RPM)'),
+                    trailing: Text(
+                      '${data.rpm} RPM',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.cyanAccent),
+                    ),
+                  ),
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.navigation_rounded, color: Colors.lightGreenAccent),
+                    title: const Text('سرعة السيارة'),
+                    trailing: Text(
+                      '${data.speed} km/h',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.lightGreenAccent),
+                    ),
+                  ),
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.thermostat_rounded, color: Colors.orangeAccent),
+                    title: const Text('حرارة سائل التبريد'),
+                    trailing: Text(
+                      '${data.coolantTemp} °C',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.orangeAccent),
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            return const Text('لا توجد بيانات متاحة حالياً.');
+          },
+        ),
       ),
     );
   }
 
   Widget _buildHistoryCard(BuildContext context) {
     if (_history.isEmpty) {
-      return Card(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Center(
-            child: Text(
-              'لا توجد فحوصات محفوظة في السجل',
-              style: TextStyle(color: Theme.of(context).hintColor, fontSize: 13),
-            ),
-          ),
-        ),
-      );
+      return const Center(child: Text('لا يوجد سجل عمليات سابق', style: TextStyle(color: Colors.grey)));
     }
-
-    return Card(
-      child: ListView.separated(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: _history.take(8).length,
-        separatorBuilder: (_, __) => const Divider(height: 1, indent: 16, endIndent: 16),
-        itemBuilder: (context, index) {
-          final record = _history[index];
-          final statusColor = record.success ? const Color(0xFF10B981) : const Color(0xFFEF4444);
-
-          return ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            leading: Icon(
-              record.success ? Icons.check_circle_outline_rounded : Icons.highlight_off_rounded,
-              color: statusColor,
-              size: 22,
-            ),
-            title: Text(record.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-            subtitle: Text(
-              intl.DateFormat('yyyy/MM/dd - hh:mm a').format(record.createdAt),
-              style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
-            ),
-            trailing: SizedBox(
-              width: 120,
-              child: Text(
-                record.result,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textDirection: TextDirection.ltr,
-                textAlign: TextAlign.left,
-                style: const TextStyle(fontSize: 12, fontFamily: 'monospace', fontWeight: FontWeight.w600),
-              ),
-            ),
-          );
-        },
-      ),
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _history.length > 5 ? 5 : _history.length,
+      itemBuilder: (context, index) {
+        final item = _history[index];
+        return ListTile(
+          dense: true,
+          title: Text(item.title),
+          subtitle: Text(item.result),
+          trailing: Icon(
+            item.success ? Icons.check_circle_rounded : Icons.error_rounded,
+            color: item.success ? Colors.green : Colors.red,
+            size: 18,
+          ),
+        );
+      },
     );
   }
 }
