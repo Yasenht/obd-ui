@@ -21,7 +21,11 @@ class ObdAnalysisApi {
             },
             body: jsonEncode({'command': command, 'response': response}),
           )
-          .timeout(const Duration(seconds: 25));
+          // // كانت المهلة 10 ثوانٍ؛ خدمة الاستضافة تبدأ ببرودة (cold start)
+          // // وتستغرق حتى ~17-40 ثانية فيبدأ التحليل بالفشل رغم صحته.
+          // // التحليل يعمل الآن في الخلفية (unawaited) فلا يؤخر أي أمر.
+          // .timeout(const Duration(seconds: 10)),
+          .timeout(const Duration(seconds: 30));
 
       if (httpResponse.statusCode < 200 || httpResponse.statusCode >= 300) {
         throw Exception('HTTP ${httpResponse.statusCode}: ${httpResponse.body}');

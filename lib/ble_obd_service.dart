@@ -55,6 +55,9 @@ class BleObdService {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _commandCharacteristic;
   BluetoothCharacteristic? _responseCharacteristic;
+
+  /// خاصية استقبال الردود FFE2 للجهاز المتصل حالياً (لأغراض التشخيص).
+  BluetoothCharacteristic? get responseCharacteristic => _responseCharacteristic;
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<List<int>>? _responseSubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
@@ -65,6 +68,36 @@ class BleObdService {
   ObdConnectionStatus _currentStatus = ObdConnectionStatus.disconnected;
   ObdConnectionStatus get currentStatus => _currentStatus;
   BluetoothDevice? get connectedDevice => _device;
+
+  /// قائمة الأوامر المدعومة في فيرموير Freematics v5 (telelogger.ino
+  /// داخل processBLE()). كل أمر خارج هذه القائمة (بما فيها أوامر
+  /// ELM327 القياسية مثل ATZ/ATH0/03/0902) يُجاب من الجهاز بـ "ERROR".
+  ///
+  /// المُعرّفات: "01XX" (أي Mode-01 PID بإزاحة ضمن قائمة obdData
+  /// أو قراءة مباشرة عبر جسر OBD) والبادئات الإعدادية APN=/SSID=/WPWD=.
+  static const Set<String> _firmwareSupportedCommands = {
+    'UPTIME', 'TICK', 'BATT', 'RESET', 'OFF', 'ON', 'ON?', 'FS',
+    'APN?', 'NET_OP', 'NET_IP', 'NET_PACKET', 'NET_DATA', 'NET_RATE',
+    'RSSI', 'SSID?', 'WPWD?', 'TEMP', 'ACC', 'GYRO', 'GF',
+    'ATE0', 'ATE1', 'VIN', 'LAT', 'LNG', 'ALT', 'SAT', 'SPD', 'CRS',
+    // أوامر DTC المقترحة (بعد تحديث الفيرموير، انظر firmware_patch/)
+    'DTC?', 'DTCS?', 'DTCS>', 'DTCCLR',
+  };
+
+  static const Set<String> _firmwareSupportedPrefixes = {
+    '01', 'APN=', 'SSID=', 'WPWD=',
+  };
+
+  /// هل الأمر مدعوم في فيرموير v5؟ (للتشخيص وتحذير المستخدم)
+  static bool isCommandSupported(String command) {
+    final cmd = command.trim().toUpperCase().replaceAll('\r', '');
+    if (cmd.isEmpty) return false;
+    if (_firmwareSupportedCommands.contains(cmd)) return true;
+    for (final prefix in _firmwareSupportedPrefixes) {
+      if (cmd.startsWith(prefix)) return true;
+    }
+    return false;
+  }
 
   void _setStatus(ObdConnectionStatus next) {
     _currentStatus = next;
@@ -193,6 +226,11 @@ class BleObdService {
 
   Stream<String> get debugLogs => _debugLogController.stream;
 
+  /// تسجيل رسالة من مستوى التعليمة (مثل طروحات DTC قبل الإرسال
+  /// وبعد الاستقبال) في نفس سجل BLE المعروض بالواجهة، لتتبع
+  /// أين يقع الخطأ: في الإرسال (FFE1) أم في الاستقبال (FFE2).
+  void appLog(String message) => _log(message);
+
   void _log(String message) {
     debugPrint(message);
 
@@ -240,6 +278,22 @@ class BleObdService {
           _responseSubscription?.cancel();
           _responseSubscription = null;
 
+          // إجهاض أي أمر معلق فورًا عند الانقطاع — بدون هذا الإصلاح كان
+          // الأمر المعلّق (مثل "0100" في سجل 15:59) ينتظر مهلة الإرسال
+          // الكاملة (30 ثانية) ثم يُنسب الخطأ خطأً إلى "عدم وصول رد"
+          // بينما السبب الفعلي انقطاع اتصال BLE أثناء انتظار الرد.
+          if (_responseCompleter != null && !_responseCompleter!.isCompleted) {
+            _responseCompleter!.completeError(
+              const ObdProtocolException(
+                'انقطع اتصال Bluetooth أثناء انتظار رد الأمر.',
+              ),
+            );
+          }
+          _responseCompleter = null;
+          _quietTimer?.cancel();
+          _quietTimer = null;
+          _responseBuffer = StringBuffer();
+
           _device = null;
           _setStatus(ObdConnectionStatus.disconnected);
 
@@ -249,6 +303,17 @@ class BleObdService {
 
       _log('اكتشاف الخدمات');
       final services = await device.discoverServices();
+
+      // التفاوض على MTU أكبر على Android؛ iOS يتفاوض تلقائياً (~185)
+      // والقيمة أكبر MTU تتيح حمل ردود DTC الأكبر في إشعار واحد.
+      if (Platform.isAndroid) {
+        try {
+          final mtu = await device.requestMtu(128);
+          _log('MTU بعد التفاوض: $mtu');
+        } catch (e) {
+          _log('تنبيه: تعذر التفاوض على MTU: $e');
+        }
+      }
 
       _log('عدد الخدمات المكتشفة: ${services.length}');
 
@@ -390,7 +455,7 @@ class BleObdService {
   }
   Future<String> sendCommand(
       String command, {
-        Duration timeout = const Duration(seconds: 6),
+        Duration timeout = const Duration(seconds: 30),
       }) async {
     final characteristic = _commandCharacteristic;
 
@@ -419,8 +484,28 @@ class BleObdService {
         ? normalizedCommand
         : '$normalizedCommand\r';
 
+    final bytes = utf8.encode(wireCommand);
+
+    // حد خاصية الأوامر في فيرموير Freematics هو SPP_CMD_MAX_LEN = 20 بايت
+    // (انظر ble_spp_server.h)؛ كل عملية كتابة واحدة على FFE1 تُعامل كأمر
+    // مستقل تماماً (لا يوجد تجميع للأمر المجزأ على جانب الجهاز).
+    if (bytes.length > 20) {
+      throw const ObdProtocolException(
+        'طول الأمر يتجاوز 20 بايت؛ خاصية الأوامر FFE1 في جهاز'
+        ' Freematics ترفض أوامر أطول من ذلك.',
+      );
+    }
+
     // تجهيز استقبال الرد قبل إرسال الأمر.
     _responseBuffer = StringBuffer();
+
+    // تحذير تشخيصي: أمر غير مدعوم في فيرموير telelogger v5
+    // (سيُجاب غالباً بـ "ERROR" — لم نحظر الإرسال لتوافق ذات bridge
+    // ELM327 الأصلية في إصدارات الفيرموير الأخرى).
+    if (!isCommandSupported(normalizedCommand)) {
+      _log('تحذير: أمر "$normalizedCommand" غير مدرج في قائمة أوامر'
+          ' فيرموير Freematics v5؛ قد يرد الجهاز "ERROR".');
+    }
 
     final completer = Completer<String>();
     _responseCompleter = completer;
@@ -429,7 +514,6 @@ class BleObdService {
 
     _log('BLE TX command: ${jsonEncode(wireCommand)}');
 
-    final bytes = utf8.encode(wireCommand);
     _log('BLE TX bytes: $bytes');
 
     final timeoutTimer = Timer(timeout, () {
@@ -451,10 +535,24 @@ class BleObdService {
 
     try {
 
-      await characteristic.write(
-        bytes,
-        withoutResponse: !characteristic.properties.write,
-      );
+      final properties = characteristic.properties;
+
+final bool withoutResponse;
+
+if (properties.write) {
+  withoutResponse = false;
+} else if (properties.writeWithoutResponse) {
+  withoutResponse = true;
+} else {
+  throw const ObdProtocolException(
+    'خاصية FFE1 لا تدعم الكتابة المطلوبة.',
+  );
+}
+
+await characteristic.write(
+  bytes,
+  withoutResponse: withoutResponse,
+);
 
       _log('تم إرسال الأمر إلى FFE1 بنجاح');
 
@@ -510,14 +608,46 @@ class BleObdService {
     }
 
     // انتظر قليلًا لتجميع أجزاء الرد قبل إكمال الأمر.
+    //
+    // فيرموير Freematics (telelogger) يرسل كل رد ضمن إشعار BLE واحد
+    // وينهيه بمحرف \r، لذا إن وصل محرف نهاية السطر والرد قصير
+    // (سطر واحد) نُكمل الرد بعد مهلة قصيرة (60ms) بدل انتظار فترة
+    // الهدوء الكاملة (550ms) لتقليل زمن كل أمر. أما الردود متعددة
+    // الأسطر أو المجزأة فتبقى تنتظر فترة الهدوء كما كان.
+    // ردود أكواد الأعطال تبدأ بـ "43 " وقد تُقطع على عدة إشعارات،
+    // لذا تُجمع دائماً عبر فترة الهدوء الكاملة (550ms) دون المسار السريع.
+    // يشمل الالتقاط أيضاً الإطارات CAN المرقّمة ("0: 43 04 ...") —
+    // سابقاً كانت السطر الأول فقط يُكمل الأمر عبر المسار السريع (60ms)
+    // وباقي الأسطر ("1: ...") تضيع فتظهر أكواد ناقصة أو مختلّة.
+    final trimmedResponse = currentResponse.trimLeft();
+    final isDtcFrame = trimmedResponse.startsWith('43 ') ||
+        RegExp(r'^\d{1,2}:\s').hasMatch(trimmedResponse);
+
+    // ردود "وسيطة" من جسر ELM/OBD (مثل "SEARCHING..." أو "BUS INIT")
+    // تصل كأول سطر قبل الرد الحقيقي؛ إن أُكمل الأمر عليها بمسار EOL
+    // السريع (60ms) فلن يصل رد الأكواد الحقيقي أصلاً — إشارة
+    // استخراج الأعطال كلها تضيع. تُجمع هذه الظاهرة عبر فترة الهدوء
+    // الكاملة مثل إطارات DTC.
+    final isInterimStatus =
+        currentResponse.toUpperCase().contains('SEARCHING') ||
+        currentResponse.toUpperCase().contains('BUS INIT') ||
+        currentResponse.toUpperCase().contains('BUSINIT');
+
     _quietTimer?.cancel();
-    _quietTimer = Timer(const Duration(milliseconds: 550), () {
-      if (!completer.isCompleted) {
-        final response = _responseBuffer.toString();
-        _log('BLE RX complete: ${jsonEncode(response)}');
-        completer.complete(response);
-      }
-    });
+    final isEolTerminated = chunk.contains('\r') &&
+        payload.length <= 32 &&
+        !isDtcFrame &&
+        !isInterimStatus;
+    _quietTimer = Timer(
+      Duration(milliseconds: isEolTerminated ? 60 : 550),
+      () {
+        if (!completer.isCompleted) {
+          final response = _responseBuffer.toString();
+          _log('BLE RX complete (${isEolTerminated ? 'EOL' : 'quiet'}): ${jsonEncode(response)}');
+          completer.complete(response);
+        }
+      },
+    );
   }
   Future<void> dispose() async {
     await disconnect();

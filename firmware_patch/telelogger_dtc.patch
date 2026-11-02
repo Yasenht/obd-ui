@@ -1,0 +1,70 @@
+--- a/firmware_v5/telelogger/telelogger.ino
++++ b/firmware_v5/telelogger/telelogger.ino
+@@ -85,6 +85,12 @@
+ char vin[18] = {0};
+ uint16_t dtc[6] = {0};
++// طلبات DTC المؤجلة: تُطلب من processBLE() وتُنفذ في process()
++// (لا يجوز إجراء قراءة ECU داخل processBLE() لأنه قد يُستدعى من
++//  idleTasks() أثناء معاملة OBD جارية، مما يفسد بيانات UART).
++volatile bool dtcRefreshRequested = false;  // قراءة حية للأكواد من ECU
++volatile bool dtcClearRequested = false;    // مسح الأكواد
+ float batteryVoltage = 0;
+ GPS_DATA* gd = 0;
+ 
+@@ -656,6 +662,20 @@
+ CBuffer* buffer = bufman.getFree();
+ buffer->state = BUFFER_STATE_FILLING;
+ 
++#if ENABLE_OBD
++  // معالجة طلبات DTC المؤجلة - خارج أي معاملة OBD جارية
++  // (القراءة داخل processBLE() أثناء معاملة OBD كانت تفسد بيانات UART)
++  if (dtcRefreshRequested && state.check(STATE_OBD_READY)) {
++    memset(dtc, 0, sizeof(dtc));
++    obd.readDTC(dtc, sizeof(dtc) / sizeof(dtc[0]));
++    dtcRefreshRequested = false;
++  }
++  if (dtcClearRequested && state.check(STATE_OBD_READY)) {
++    obd.clearDTC();
++    memset(dtc, 0, sizeof(dtc));
++    dtcClearRequested = false;
++  }
++#endif
++
+ #if ENABLE_OBD
+ // process OBD data if connected
+ if (state.check(STATE_OBD_READY)) {
+@@ -1333,6 +1363,48 @@
+ } else if (!strcmp(cmd, "CRS") && gd) {
+ n += snprintf(buf + n, bufsize - n, "%u", (unsigned int)gd->heading);
+ +  } else if (!strcmp(cmd, "03") || !strcmp(cmd, "DTCS?")) {
+ +    // إرسال رد وضع 03 القياسي من ذاكرة الأكواد المخزنة (obd.readDTC):
+ +    // "43" + بايت عدد الأكواد + زوج بايتات لكل كود،
+ +    // مثال كودين: "43 02 01 08 01 09" -> P0108، P0109.
+ +    // الأمر "03" بمعناه الحي: يُسجّل طلب قراءة حية يُنفذ في process()
+ +    // خارج معاملة OBD جارية، فيصبح الرد التالي محدثاً من ECU.
+ +    byte count = 0;
+ +    while (count < sizeof(dtc) / sizeof(dtc[0]) && dtc[count]) count++;
+ +    int used = n;
+ +    used += snprintf(buf + used, bufsize - used, "43 %02X", (unsigned int)count);
+ +    for (byte i = 0; i < count; i++) {
+ +      if (used >= bufsize - 7) break;  // منع تجاوز buf إطلاقاً
+ +      used += snprintf(buf + used, bufsize - used, " %02X %02X",
+ +        (dtc[i] >> 8) & 0xFF, dtc[i] & 0xFF);
+ +    }
+ +    n = used;
+ +    if (!strcmp(cmd, "03")) {
+ +      dtcRefreshRequested = true;
+ +    }
+ +  } else if (!strcmp(cmd, "DTC?")) {
+ +    byte count = 0;
+ +    while (count < sizeof(dtc) / sizeof(dtc[0]) && dtc[count]) count++;
+ +    n += snprintf(buf + n, bufsize - n, "DTC=%u", (unsigned int)count);
+ +  } else if (!strcmp(cmd, "DTCS>")) {
+ +    dtcRefreshRequested = true;
+ +    n += snprintf(buf + n, bufsize - n, "REQ");
+ +  } else if (!strcmp(cmd, "DTCCLR")) {
+ +    dtcClearRequested = true;
+ +    n += snprintf(buf + n, bufsize - n, "OK");
+   } else {
+ n += snprintf(buf + n, bufsize - n, "ERROR");
+ }

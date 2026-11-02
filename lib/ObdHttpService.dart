@@ -29,8 +29,9 @@ class ObdLiveData {
       final pid = item['pid'];
       final value = item['value'] ?? 0;
 
-      // 0x10C (269 Decimal) -> RPM
-      if (pid == 0x10C || pid == 269) {
+      // 0x10C = 268 (0x100 | PID_RPM 0x0C) -> RPM
+      // handlerLiveData في الفيرموير ينشر pid بصيغة 0x100 | PID.
+      if (pid == 0x10C || pid == 268) {
         extractedRpm = value;
       }
       // 0x10D (269 Decimal) -> Speed
@@ -45,7 +46,12 @@ class ObdLiveData {
 
     return ObdLiveData(
       vin: obd['vin'] ?? 'N/A',
-      batteryVoltage: (obd['battery'] ?? 0) / 100.0, 
+      // الفيرموير يرسل الجهد مباشرة بالفولت (مثل 12.4):
+      // في process() داخل telelogger.ino:
+      // batteryVoltage = analogRead(A0) * 45 / 4095
+      // // القيمة السابقة كانت مقسومة على 100 على افتراض أنها بالملي فولت
+      // batteryVoltage: (obd['battery'] ?? 0) / 100.0,
+      batteryVoltage: (obd['battery'] as num? ?? 0).toDouble(),
       rpm: extractedRpm,
       speed: extractedSpeed,
       coolantTemp: extractedTemp,
@@ -63,23 +69,44 @@ class ObdHttpService {
 
   ObdHttpService({this.baseUrl = 'http://192.168.4.1'});
 
+  /// نقاط النهاية المدعومة بالترتيب:
+  ///
+  /// 1. "api/live" المسجلة في urlHandlerList داخل telelogger.ino (الإصدار v5).
+  /// 2. "live" مسار قديم محتمل في إصدارات الفيرموير الأقدم؛ يُستخدم كاحتياط.
+  static const List<String> _endpoints = <String>[
+    '/api/live',
+    '/live',
+  ];
+
+  int _activeEndpoint = 0;
+
   /// بدء سحب البيانات باستمرار كل 500 مللي ثانية
   void startPolling({Duration interval = const Duration(milliseconds: 500)}) {
     stopPolling();
 
     _pollingTimer = Timer.periodic(interval, (_) async {
       try {
+        // تجربة نقطة النهاية الحالية أولاً، وعند الفشل ننتقل للنقطة التالية.
+        final path = _endpoints[_activeEndpoint];
         final response = await http
-            .get(Uri.parse('$baseUrl/live'))
-            .timeout(const Duration(seconds: 2));
+            .get(Uri.parse('$baseUrl$path'))
+            .timeout(const Duration(seconds: 30));
 
         if (response.statusCode == 200) {
+          // نجح المسار الحالي؛ نبقيه محجوزاً.
           final Map<String, dynamic> jsonMap = jsonDecode(response.body);
           final obdData = ObdLiveData.fromJson(jsonMap);
           _dataController.add(obdData);
+        } else {
+          if (_activeEndpoint < _endpoints.length - 1) {
+            _activeEndpoint++;
+          }
         }
       } catch (e) {
         // التعامل مع خطأ الانقطاع المؤقت
+        if (_activeEndpoint < _endpoints.length - 1) {
+          _activeEndpoint++;
+        }
       }
     });
   }
