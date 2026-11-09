@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../ble_obd_service.dart';
 import '../../controllers/app_scope.dart';
-import '../../ObdHttpService.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/common.dart';
 
@@ -409,7 +408,7 @@ class _DeviceTile extends StatelessWidget {
 }
 
 // ============================================================
-// قسم البيانات الحية: قراءات BLE المحلية + بث HTTP (TELELOGGER).
+// قسم البيانات الحية: قراءات BLE المحلية فقط (RPM/السرعة/الحرارة/الجهد).
 // ============================================================
 
 Widget liveDataSection(
@@ -449,7 +448,7 @@ Widget liveDataSection(
     children: [
       SectionHeader(
         title: 'البيانات الحية',
-        subtitle: 'قراءة مباشرة من الجهاز عبر BLE أو بث Wi-Fi',
+        subtitle: 'قراءة مباشرة من الجهاز عبر BLE (كل 5 ثوانٍ)',
         icon: Icons.monitor_heart_rounded,
       ),
       const SizedBox(height: 10),
@@ -508,6 +507,14 @@ Widget liveDataSection(
                   ),
                   const SizedBox(width: 8),
                   MetricTile(
+                    icon: Icons.thermostat_rounded,
+                    label: 'حرارة التبريد (°م)',
+                    value: formatValue(controller.liveCoolant,
+                        unit: '', fractionDigits: 0),
+                    color: AppColors.error,
+                  ),
+                  const SizedBox(width: 8),
+                  MetricTile(
                     icon: Icons.battery_charging_full_rounded,
                     label: 'جهد (V)',
                     value: formatValue(controller.liveBattery,
@@ -537,176 +544,82 @@ Widget liveDataSection(
                   ),
                 ],
               ),
-              const Divider(height: 22),
-              // البث الحي عبر Wi-Fi (HttpService)
+              const Divider(height: 18),
+              // تعديلات الوقود: تُقرأ عند ضغط الزر حصراً — كل ضغطة تُرسل
+              // "0106" (STFT) و"0107" (LTFT) وتعيد حساب النتائج والمجموع.
               Row(
                 children: [
-                  Icon(Icons.wifi_rounded, size: 18, color: palette.textMuted),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'البث الحي عبر Wi-Fi (TELELOGGER)',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13,
-                        color: palette.text,
-                      ),
-                    ),
+                  MetricTile(
+                    icon: Icons.local_gas_station_rounded,
+                    label: 'STFT %',
+                    value: formatValue(controller.liveStft,
+                        unit: '', fractionDigits: 1),
+                    color: const Color(0xFF4E7F3A),
                   ),
-                  Switch(
-                    value: controller.httpPollingEnabled,
-                    onChanged: controller.setHttpPollingEnabled,
+                  const SizedBox(width: 8),
+                  MetricTile(
+                    icon: Icons.schedule_rounded,
+                    label: 'LTFT %',
+                    value: formatValue(controller.liveLtft,
+                        unit: '', fractionDigits: 1),
+                    color: const Color(0xFF2E7D6B),
+                  ),
+                  const SizedBox(width: 8),
+                  MetricTile(
+                    icon: Icons.summarize_rounded,
+                    label: 'المجموع %',
+                    value: formatValue(controller.fuelTrimSum,
+                        unit: '', fractionDigits: 1),
+                    color: AppColors.warning,
                   ),
                 ],
               ),
               const SizedBox(height: 8),
-              HeroHttpPanel(enabled: controller.httpPollingEnabled),
+              Row(
+                children: [
+                  Icon(
+                    Icons.calculate_rounded,
+                    size: 13,
+                    color: controller.fuelTrimReading
+                        ? AppColors.warning
+                        : palette.textMuted,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      controller.fuelTrimReading
+                          ? 'جارٍ الإرسال والحساب...'
+                          : controller.fuelTrimLastUpdate == null
+                              ? 'اضغط الزر لإرسال الأوامر 0106 / 0107'
+                              : 'آخر حساب: '
+                                  '${controller.fuelTrimLastUpdate!.toLocal().hour.toString().padLeft(2, '0')}:'
+                                  '${controller.fuelTrimLastUpdate!.toLocal().minute.toString().padLeft(2, '0')}:'
+                                  '${controller.fuelTrimLastUpdate!.toLocal().second.toString().padLeft(2, '0')} '
+                                  '(مجموع = STFT + LTFT)',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: controller.fuelTrimReading
+                            ? AppColors.warning
+                            : palette.textMuted,
+                      ),
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    onPressed: controller.connected && !controller.busy
+                        ? controller.readFuelTrims
+                        : null,
+                    icon: const Icon(Icons.refresh_rounded, size: 16),
+                    label: const Text('قراءة وحساب'),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
       ),
     ],
   );
-}
-
-class HeroHttpPanel extends StatelessWidget {
-  const HeroHttpPanel({super.key, required this.enabled});
-
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = Palette.of(context);
-    final controller = context.controller;
-
-    if (!enabled) {
-      return Text(
-        'استقبال البيانات الحية المعطّل — فعّل المفتاح أعلاه بعد الاتصال '
-        'بشبكة Wi-Fi الخاصة بالجهاز (TELELOGGER).',
-        style: TextStyle(fontSize: 11.5, color: palette.textMuted, height: 1.5),
-      );
-    }
-
-    return StreamBuilder<ObdLiveData>(
-      stream: controller.httpService.dataStream,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Row(
-            children: [
-              const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'جارٍ الاستماع لردود Freematics عبر /api/live...',
-                  style: TextStyle(fontSize: 11.5, color: palette.textMuted),
-                ),
-              ),
-            ],
-          );
-        }
-
-        if (snapshot.hasError) {
-          return Text(
-            'لم تصف بيانات بعد — تأكد من اتصال الهاتف بشبكة TELELOGGER.\n'
-            '${snapshot.error}',
-            style:
-                TextStyle(fontSize: 11, color: AppColors.warning, height: 1.4),
-          );
-        }
-
-        if (!snapshot.hasData ||
-            (snapshot.data!.rpm == 0 &&
-                snapshot.data!.speed == 0 &&
-                snapshot.data!.batteryVoltage <= 0)) {
-          return Text(
-            'لا بيانات متاحة حتى الآن عبر HTTP — تأكد من تشغيل HTTPD في الفيرموير.',
-            style:
-                TextStyle(fontSize: 11, color: palette.textMuted, height: 1.4),
-          );
-        }
-
-        final data = snapshot.data!;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _HttpRow(
-              icon: Icons.speed_rounded,
-              label: 'RPM',
-              value: '${data.rpm}',
-            ),
-            _HttpRow(
-              icon: Icons.directions_car_rounded,
-              label: 'السرعة',
-              value: '${data.speed} km/h',
-            ),
-            _HttpRow(
-              icon: Icons.thermostat_rounded,
-              label: 'حرارة التبريد',
-              value: '${data.coolantTemp} °C',
-            ),
-            _HttpRow(
-              icon: Icons.battery_charging_full_rounded,
-              label: 'البطارية',
-              value: data.batteryVoltage > 0
-                  ? '${data.batteryVoltage.toStringAsFixed(2)} V'
-                  : '—',
-            ),
-            if (data.vin.isNotEmpty && data.vin != 'N/A')
-              _HttpRow(
-                icon: Icons.fingerprint_rounded,
-                label: 'VIN',
-                value: data.vin,
-                ltr: true,
-              ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _HttpRow extends StatelessWidget {
-  const _HttpRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-    this.ltr = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-  final bool ltr;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = Palette.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        children: [
-          Icon(icon, size: 16, color: palette.onPrimary),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: TextStyle(fontSize: 12, color: palette.textMuted),
-          ),
-          const Spacer(),
-          Text(
-            value,
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 13,
-              color: palette.text,
-            ),
-            textDirection: ltr ? TextDirection.ltr : TextDirection.rtl,
-          ),
-        ],
-      ),
-    );
-  }
 }

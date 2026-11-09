@@ -8,6 +8,7 @@ class PidReading {
     required this.value,
     required this.unit,
     required this.raw,
+    this.detail = '',
   });
 
   final int pid;
@@ -16,7 +17,14 @@ class PidReading {
   final String unit;
   final String raw;
 
-  String get displayValue => '$value $unit'.trim();
+  /// التفسير النصي للقراءة — للأوامر التي لا قيمة رقمية حصيلة لها
+  /// مثل "0100" (خريطة الأوامر المدعومة) و"0101" (حالة MIL).
+  final String detail;
+
+  /// القيمة المعروضة في النتيجة: التفسير النصي إن وُجد، وإلا
+  /// "القيمة + الوحدة" (مثل "76 °C" أو "13.53 V" أو "50 %").
+  String get displayValue =>
+      detail.isNotEmpty ? detail : '$value $unit'.trim();
 }
 
 /// سجل فحص محفوظ محلياً لكي يظهر حتى بعد إعادة تشغيل التطبيق.
@@ -48,8 +56,10 @@ class InspectionRecord {
 
   factory InspectionRecord.fromJson(Map<String, dynamic> json) {
     return InspectionRecord(
-      id: json['id'] as String? ?? DateTime.now().microsecondsSinceEpoch.toString(),
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime.now(),
+      id: json['id'] as String? ??
+          DateTime.now().microsecondsSinceEpoch.toString(),
+      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
+          DateTime.now(),
       title: json['title'] as String? ?? 'فحص',
       result: json['result'] as String? ?? '',
       success: json['success'] as bool? ?? false,

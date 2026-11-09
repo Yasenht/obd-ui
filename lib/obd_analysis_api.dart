@@ -28,7 +28,8 @@ class ObdAnalysisApi {
           .timeout(const Duration(seconds: 30));
 
       if (httpResponse.statusCode < 200 || httpResponse.statusCode >= 300) {
-        throw Exception('HTTP ${httpResponse.statusCode}: ${httpResponse.body}');
+        throw Exception(
+            'HTTP ${httpResponse.statusCode}: ${httpResponse.body}');
       }
 
       final dynamic decoded = jsonDecode(utf8.decode(httpResponse.bodyBytes));

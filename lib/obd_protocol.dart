@@ -1,15 +1,19 @@
 import 'models.dart';
 
-
 class ObdCommands {
   static const String readVin = '0902\r';
   static const String battery = 'BATT\r';
-  static const String disableEcho = 'ATE0\r';  
+  static const String disableEcho = 'ATE0\r';
   static const String readRpm = '010C\r';
   static const String readCoolantTemperature = '0105\r';
   static const String readSpeed = '010D\r';
   static const String readThrottle = '0111\r';
   static const String readDtc = '03\r';
+
+  // تعديل الوقود: قصير المدى (STFT) وطويل المدى (LTFT).
+  // الصيغة المعيارية: النسبة المئوية = A - 128.
+  static const String readStft = '0106\r';
+  static const String readLtft = '0107\r';
 
   // أمر DTC المقترح للفيرموير v5 بعد التحديث (firmware_patch/)؛
   // يعيد رد mode-03 قياسياً مصاغاً ("43 01 08 ...") مخزّناً منذ الإقلاع.
@@ -22,17 +26,12 @@ class ObdCommands {
   static const String firmwareOn = 'ON\r';
   static const String uptime = 'UPTIME\r';
   static const String rssi = 'RSSI\r';
-  
+
   static String readPid(int pid) {
-    final hexPid = pid
-        .toRadixString(16)
-        .padLeft(2, '0')
-        .toUpperCase();
+    final hexPid = pid.toRadixString(16).padLeft(2, '0').toUpperCase();
 
     return '01$hexPid\r';
   }
-
-
 }
 
 class ObdProtocolException implements Exception {
@@ -41,7 +40,6 @@ class ObdProtocolException implements Exception {
   @override
   String toString() => message;
 }
-
 
 class ObdParser {
   static final RegExp _hexToken = RegExp(
@@ -54,9 +52,7 @@ class ObdParser {
 
   /// تنظيف الرد من محارف نهاية السطر والمسافات الخارجية.
   static String _cleanResponse(String response) {
-    return response
-        .replaceAll(RegExp(r'[\r\n>]'), '')
-        .trim();
+    return response.replaceAll(RegExp(r'[\r\n>]'), '').trim();
   }
 
   /// استخراج بايتات hexadecimal من الرد.
@@ -65,10 +61,10 @@ class ObdParser {
         .allMatches(response)
         .map(
           (match) => int.parse(
-        match.group(0)!,
-        radix: 16,
-      ),
-    )
+            match.group(0)!,
+            radix: 16,
+          ),
+        )
         .toList();
   }
 
@@ -91,6 +87,191 @@ class ObdParser {
         upper.contains('?');
   }
 
+  /// وصف نتيجة أمر يدوي غير 01xx بمعناها ووحدتها — يعيد null إن
+  /// لم يصف الأمر خلايا معروفة (مثل "BATT": جهد وحدة التحكم).
+  ///
+  /// أوامر 01xx تُفك عبر [parsePid] حصرياً (انظر AppController).
+  static String? describeCommandResult(String command, String response) {
+    final cmd = command.trim().toUpperCase();
+    final resp = response.trim();
+
+    if (cmd == 'BATT' && RegExp(r'^-?\d+(?:\.\d+)?$').hasMatch(resp)) {
+      return 'جهد وحدة التحكم: $resp V';
+    }
+
+    return null;
+  }
+
+  /// اسم القراءة ووحدتها من كتالوج أوامر Mode-01 — مفيد لعرض معنى
+  /// الأمر قبل الإرسال (عنوان نتيجة الأوامر اليدوية مثلاً).
+  static (String, String) pidMetadata(int pid) {
+    late final String label;
+    late final String unit;
+    switch (pid) {
+      case 0x00:
+        // رد أمر "0100": خريطة بتية للأوامر المدعومة من 01 إلى 20.
+        label = 'الأوامر المدعومة (01–20)';
+        unit = '';
+        break;
+
+      case 0x01:
+        // "0101": حالة مصباح العطل (MIL) وعدد الأكواد المخزنة.
+        label = 'مصباح العطل (MIL) وعدد الأكواد';
+        unit = 'كود';
+        break;
+
+      case 0x02:
+        // "0102": كود العطل المحفوظ في إطار التجميد.
+        label = 'كود العطل في إطار التجميد';
+        unit = '';
+        break;
+
+      case 0x03:
+        // "0103": حالة حلقة الوقود (مفتوحة/مغلقة).
+        label = 'حالة نظام الوقود';
+        unit = '';
+        break;
+
+      case 0x04:
+        label = 'حمل المحرك المحسوب';
+        unit = '%';
+        break;
+
+      case 0x05:
+        label = 'حرارة سائل التبريد';
+        unit = '°C';
+        break;
+
+      case 0x06:
+        // "0106": تعديل وقود قصير المدى (STFT) كنسبة مئوية.
+        label = 'تعديل وقود قصير المدى (STFT)';
+        unit = '%';
+        break;
+
+      case 0x07:
+        // "0107": تعديل وقود طويل المدى (LTFT) كنسبة مئوية.
+        label = 'تعديل وقود طويل المدى (LTFT)';
+        unit = '%';
+        break;
+
+      case 0x0B:
+        label = 'ضغط السحب المطلق';
+        unit = 'kPa';
+        break;
+
+      case 0x0C:
+        label = 'دوران المحرك';
+        unit = 'RPM';
+        break;
+
+      case 0x0D:
+        label = 'سرعة المركبة';
+        unit = 'km/h';
+        break;
+
+      case 0x0E:
+        label = 'زمن الإشعال المتقدم';
+        unit = '°';
+        break;
+
+      case 0x0F:
+        label = 'حرارة هواء السحب';
+        unit = '°C';
+        break;
+
+      case 0x10:
+        label = 'معدل تدفق الهواء (MAF)';
+        unit = 'g/s';
+        break;
+
+      case 0x11:
+        label = 'موضع الخانق';
+        unit = '%';
+        break;
+
+      case 0x13:
+        // "0113": خريطة بتية لحساسات الأكسجين الملاحَظة.
+        label = 'حساسات الأكسجين الملاحَظة';
+        unit = 'حساس';
+        break;
+
+      case 0x1F:
+        label = 'مدة تشغيل المحرك';
+        unit = 'ث';
+        break;
+
+      case 0x21:
+        label = 'المسافة بعمل مصباح العطل';
+        unit = 'km';
+        break;
+
+      case 0x2C:
+        label = 'أمر إعادة تدوير العادم (EGR)';
+        unit = '%';
+        break;
+
+      case 0x2F:
+        label = 'مستوى الوقود';
+        unit = '%';
+        break;
+
+      case 0x30:
+        label = 'عمليات الإغلاق منذ مسح الأكواد';
+        unit = 'مرة';
+        break;
+
+      case 0x31:
+        label = 'المسافة منذ مسح الأكواد';
+        unit = 'km';
+        break;
+
+      case 0x33:
+        label = 'الضغط الجوي (البارومتر)';
+        unit = 'kPa';
+        break;
+
+      case 0x42:
+        label = 'جهد وحدة التحكم';
+        unit = 'V';
+        break;
+
+      case 0x43:
+        label = 'الحمل المطلق';
+        unit = '%';
+        break;
+
+      case 0x45:
+        label = 'موضع الخانق النسبي';
+        unit = '%';
+        break;
+
+      case 0x46:
+        label = 'حرارة الهواء الخارجي';
+        unit = '°C';
+        break;
+
+      case 0x4C:
+        label = 'ملعب الخانق (Actuator)';
+        unit = '%';
+        break;
+
+      case 0x5A:
+        label = 'دعسة الوقود النسبية';
+        unit = '%';
+        break;
+
+      case 0x5C:
+        label = 'حرارة زيت المحرك';
+        unit = '°C';
+        break;
+
+      default:
+        label = 'PID ${pid.toRadixString(16).toUpperCase()}';
+        unit = '';
+    }
+    return (label, unit);
+  }
+
   /// تحليل PID مع دعم تنسيق Freematics المباشر
   /// وتنسيق OBD-II القياسي.
   static PidReading parsePid({
@@ -102,54 +283,46 @@ class ObdParser {
     if (isError(cleaned)) {
       throw ObdProtocolException(
         'تعذر قراءة PID '
-            '${pid.toRadixString(16).toUpperCase()}: $cleaned',
+        '${pid.toRadixString(16).toUpperCase()}: $cleaned',
       );
     }
 
     late final num value;
-    late final String label;
-    late final String unit;
+    var detail = '';
 
-    // اسم القراءة ووحدتها.
-    switch (pid) {
-      case 0x0C:
-        label = 'دوران المحرك';
-        unit = 'RPM';
-        break;
+    // اسم القراءة ووحدتها من كتالوج أوامر Mode-01 (انظر [pidMetadata]).
+    final (label, unit) = pidMetadata(pid);
 
-      case 0x05:
-        label = 'حرارة سائل التبريد';
-        unit = '°C';
-        break;
-
-      case 0x0D:
-        label = 'سرعة المركبة';
-        unit = 'km/h';
-        break;
-
-      case 0x11:
-        label = 'موضع الخانق';
-        unit = '%';
-        break;
-
-      default:
-        label = 'PID ${pid.toRadixString(16).toUpperCase()}';
-        unit = '';
-    }
-    // هذه القيم جاهزة للتحويل إلى رقم，
+    // هذه القيم جاهزة للتحويل إلى رقم،
     // ولا تحتاج إلى فك بايتات OBD.
     if (_directNumber.hasMatch(cleaned)) {
       value = num.parse(cleaned);
     } else {
-      
       final bytes = hexBytes(cleaned);
       final markerIndex = _indexOf(
         bytes,
         [0x41, pid],
       );
 
-      if (markerIndex < 0 ||
-          markerIndex + 2 >= bytes.length) {
+      // استثناء "0100": بعض الجسور الفرومية تطبع الخريطة البتية
+      // مباشرة "BE 3F B8 13" دون صدى الأمر "41 00" — نقبل الأربع
+      // بايتات الأولى قبل أن نرفض الرد ككل.
+      if (markerIndex < 0 && pid == 0x00 && bytes.length >= 4) {
+        final supported = _decodeSupportedPids(bytes.sublist(0, 4), 1);
+        if (supported.isEmpty) {
+          throw ObdProtocolException('خريطة أوامر فارغة: $cleaned');
+        }
+        return PidReading(
+          pid: pid,
+          label: label,
+          value: supported.length,
+          unit: unit,
+          raw: cleaned,
+          detail: _supportedPidsText(supported, 0x01, 0x20),
+        );
+      }
+
+      if (markerIndex < 0 || markerIndex + 2 >= bytes.length) {
         throw ObdProtocolException(
           'رد PID غير معروف أو غير مكتمل: $cleaned',
         );
@@ -157,29 +330,190 @@ class ObdParser {
 
       final a = bytes[markerIndex + 2];
 
-      final b = markerIndex + 3 < bytes.length
-          ? bytes[markerIndex + 3]
-          : 0;
+      final b = markerIndex + 3 < bytes.length ? bytes[markerIndex + 3] : 0;
 
       switch (pid) {
+        case 0x00:
+          // فك خريطة الأوامر المدعومة: بايتات A،B،C،D هي بتات
+          // ترتيبها (MSB أولاً) يمثل PIDs من 0x01 إلى 0x20.
+          final bitmap = <int>[a];
+          var index = markerIndex + 3;
+          while (bitmap.length < 4 && index < bytes.length) {
+            bitmap.add(bytes[index]);
+            index++;
+          }
+          final supported = _decodeSupportedPids(bitmap, 1);
+          if (supported.isEmpty) {
+            throw ObdProtocolException('رد 0100 بلا أوامر مدعومة: $cleaned');
+          }
+          value = supported.length;
+          detail = _supportedPidsText(supported, 0x01, 0x20);
+          break;
+
+        case 0x01:
+          // البت الأعلى في A = حالة مصباح العطل، والبقية = عدد الأكواد.
+          final mil = (a & 0x80) != 0;
+          final faults = a & 0x7F;
+          value = faults;
+          detail = 'MIL: ${mil ? 'مضاء' : 'مطفأ'} • عدد الأكواد: $faults';
+          break;
+
+        case 0x02:
+          // كود العطل في إطار التجميد بنفس صيغة أكواد mode-03.
+          final high = a;
+          final low = b;
+          final first = ['P', 'C', 'B', 'U'][(high >> 6) & 0x03];
+          final second = ((high >> 4) & 0x03).toRadixString(16).toUpperCase();
+          final suffix = '${(high & 0x0F).toRadixString(16).toUpperCase()}'
+              '${low.toRadixString(16).padLeft(2, '0').toUpperCase()}';
+          value = a * 256 + b;
+          detail = 'كود في إطار التجميد: $first$second$suffix';
+          break;
+
+        case 0x03:
+          // كل قيمة معروفة للحالة لها معنى قياسي (Open/Closed Loop).
+          value = a;
+          switch (a) {
+            case 0x01:
+              detail = 'حلقة مفتوحة (لم تكتمل الظروف بعد)';
+              break;
+            case 0x02:
+              detail = 'حلقة مغلقة (استخدام تقييم حساس O2)';
+              break;
+            case 0x04:
+              detail = 'حلقة مفتوحة بسبب خلل نظام الوقود';
+              break;
+            case 0x08:
+              detail = 'حلقة مفتوحة بسبب خلل خارجي';
+              break;
+            case 0x10:
+              detail = 'حلقة مغلقة، تقييم حساسات الأكسجين مكتمل';
+              break;
+            default:
+              detail = 'قيمة حالة غير معروفة: $a';
+          }
+          break;
+
+        case 0x04:
+          // الحمل المحسوب = A * 100 / 255 %
+          value = a * 100 / 255;
+          break;
+
         case 0x0C:
           //  RPM = (A * 256 + B) / 4
           value = (a * 256 + b) / 4;
           break;
 
         case 0x05:
-        // درجة الحرارة = A - 40
+          // درجة الحرارة = A - 40
           value = a - 40;
           break;
 
+        case 0x06:
+        case 0x07:
+          // تعديل الوقود قصير/طويل المدى = A - 128 %
+          value = a - 128;
+          break;
+
         case 0x0D:
-        // السرعة بوحدة km/h
+          // السرعة بوحدة km/h
           value = a;
           break;
 
+        case 0x0E:
+          // الإشعال المتقدم = A / 2 - 64 درجة
+          value = a / 2 - 64;
+          break;
+
+        case 0x0F:
+          // حرارة هواء السحب = A - 40
+          value = a - 40;
+          break;
+
+        case 0x10:
+          // MAF = (A * 256 + B) / 100 g/s
+          value = (a * 256 + b) / 100;
+          break;
+
         case 0x11:
-        // موضع الخانق كنسبة مئوية
+          // موضع الخانق كنسبة مئوية
           value = a * 100 / 255;
+          break;
+
+        case 0x13:
+          // كل بت مجموع في A يمثل حساس O2 — العدد = عدد البتات المجابوبة.
+          value = _bitCount(a);
+          detail = 'عدد الحساسات الملاحَظة: ${_bitCount(a)} من 8';
+          break;
+
+        case 0x1F:
+          // مدة تشغيل المحرك = A * 256 + B ثانية
+          value = a * 256 + b;
+          break;
+
+        case 0x21:
+          // المسافة بعمل مصباح العطل = A * 256 + B كم
+          value = a * 256 + b;
+          break;
+
+        case 0x2C:
+          // أمر EGR = A * 100 / 255 %
+          value = a * 100 / 255;
+          break;
+
+        case 0x2F:
+          // مستوى الوقود كنسبة مئوية
+          value = a * 100 / 255;
+          break;
+
+        case 0x30:
+          // عدد عمليات التسخين منذ مسح الأكواد = A
+          value = a;
+          break;
+
+        case 0x31:
+          // المسافة منذ مسح الأكواد = A * 256 + B كم
+          value = a * 256 + b;
+          break;
+
+        case 0x33:
+          // الضغط الجوي = A بوحدة kPa
+          value = a;
+          break;
+
+        case 0x42:
+          // جهد الوحدة = (A * 256 + B) / 1000 فولت
+          value = (a * 256 + b) / 1000;
+          break;
+
+        case 0x43:
+          // الحمل المطلق = (A * 256 + B) / 2.55 %
+          value = (a * 256 + b) * 100 / 255;
+          break;
+
+        case 0x45:
+          // الخانق النسبي = A * 100 / 255 %
+          value = a * 100 / 255;
+          break;
+
+        case 0x46:
+          // حرارة الهواء الخارجي = A - 40
+          value = a - 40;
+          break;
+
+        case 0x4C:
+          // ملعب الخانق = A * 100 / 255 %
+          value = a * 100 / 255;
+          break;
+
+        case 0x5A:
+          // دعسة الوقود النسبية = A * 100 / 255 %
+          value = a * 100 / 255;
+          break;
+
+        case 0x5C:
+          // حرارة زيت المحرك = A - 40
+          value = a - 40;
           break;
 
         default:
@@ -187,8 +521,7 @@ class ObdParser {
       }
     }
 
-    final normalizedValue = value.toDouble() ==
-        value.toDouble().roundToDouble()
+    final normalizedValue = value.toDouble() == value.toDouble().roundToDouble()
         ? value.toInt()
         : value;
 
@@ -198,6 +531,7 @@ class ObdParser {
       value: normalizedValue,
       unit: unit,
       raw: cleaned,
+      detail: detail,
     );
   }
 
@@ -229,10 +563,9 @@ class ObdParser {
 
   /// تحليل أكواد الأعطال DTC محلياً من رد أمر "03"/"DTCS?".
   ///
-  /// الفك للعرض يتم هنا في التطبيق من رد جهاز OBD مباشرةً، والرد الخام
-  /// يُرسل أيضاً في الخلفية (مع الأمر الأصلي) إلى خدمة التحليل
-  /// في _runApiAnalysis مباشرةً — دون أي تعديل في محتواه، كالصيغة
-  /// القياسية "43 02 01 08 01 09 ..." التي وصلت من الجهاز.
+  /// الأسطر الوسيطة من الجسر (SEARCHING.../BUS INIT...) تُتجاهل ولا
+  /// تمنع فك الرد 43 الناقل بعدها؛ الخطأ الحقيقي (ERROR/NO DATA)
+  /// يستبق ذخيرة الأكواد كاملة.
   ///
   /// يدعم الصيغتين المعروفتين:
   ///
@@ -251,13 +584,54 @@ class ObdParser {
   /// (أزواج الأكواد + إغلاق اختياري 00 00). ولا يُعتمد بايت العدد
   /// إلا بعد التحقق من مطابقة عدد أزواج الأكواد غير الصفرية لقيمته
   /// وأن تُتبع أزراراً — فلا يُزاح فكّ الأكواد بأي من الصيغتين.
+  ///
+  /// 3. صيغة نصية مباشرة: بعض الأجهزة ترسل الأكواد كنص حرفي دون
+  ///    رد "43" البايتي إطلاقاً، مثال: "P0128, P0420, P0430" أو
+  ///    "p0128 p0420 p0430" (حساس/غير حساس للحالة، بأي فاصل — فاصلة
+  ///    أو مسافة أو سطر جديد). تُفك هذه الأكواد نصياً وتُدمج مع أي
+  ///    أكواد من الصيغ البايتية بالترتيب، مع إزالة التكرار.
+  /// الأسطر الوسيطة التي يطبعها جسر ELM327 قبل الرد الحقيقي
+  /// (مثل طلب البحث عن البروتوكول) — تُتجاهل ولا تمنع فك الأكواد.
+  static bool _isBannerLine(String line) {
+    final upper = line.toUpperCase();
+    return upper.contains('SEARCHING') ||
+        upper.contains('BUS INIT') ||
+        upper.contains('BUSINIT') ||
+        upper.contains('WAIT');
+  }
+
+  /// نمط كود DTC نصي حرفي: حرف نظام (P/C/B/U) + 0-3 (أفقي فرعي) +
+  /// ثلاث صيغات سداسية عشرية — مثل P0128 وC0040 وU0155. غير حساس
+  /// للحالة، ومحدود من الجانبين كي لا يلتقط أجزاء من كلمات أخرى.
+  static final RegExp _textDtcPattern = RegExp(
+    r'(?<![0-9A-Za-z])[PCBU][0-3][0-9A-Fa-f]{3}(?![0-9A-Za-z])',
+    caseSensitive: false,
+  );
+
   static List<String> parseDtc(String response) {
-    if (isError(response)) return const [];
+    // Banner filtering first: a real bridge response may arrive like
+    // "SEARCHING...\r\n43 03 30 00 ..." — a full mode-03 reply embedded
+    // after an intermediary line. isError() used to throw away these
+    // valid codes entirely and make the vehicle appear fault-free.
+    final lines = _mergeFrames(response).where((line) {
+      if (_isBannerLine(line)) return false;
+      return true;
+    }).toList();
+
+    final joined = lines.join(' ');
+    if (isError(joined)) return const []; // a genuine error (ERROR/NO DATA...)
 
     final codes = <String>[];
-    final merged = _mergeFrames(response);
 
-    for (final text in merged) {
+    for (final text in lines) {
+      // الصيغة النصية: الأجهزة التي ترسل الأكواد حرفياً (مثل
+      // "P0128, P0420, P0430") لا تحمل بايت وضع "43" إطلاقاً —
+      // نلتقطها نصياً من كل سطر قبل فحص الصيغ البايتية.
+      for (final match in _textDtcPattern.allMatches(text)) {
+        final code = match.group(0)!.toUpperCase();
+        if (!codes.contains(code)) codes.add(code);
+      }
+
       final bytes = hexBytes(text);
       final marker = _indexOf(bytes, const [0x43]);
       if (marker < 0) continue;
@@ -279,8 +653,7 @@ class ObdParser {
 
         final first = ['P', 'C', 'B', 'U'][(high >> 6) & 0x03];
         final second = ((high >> 4) & 0x03).toRadixString(16).toUpperCase();
-        final suffix =
-            '${(high & 0x0F).toRadixString(16).toUpperCase()}'
+        final suffix = '${(high & 0x0F).toRadixString(16).toUpperCase()}'
             '${low.toRadixString(16).padLeft(2, '0').toUpperCase()}';
 
         final code = '$first$second$suffix';
@@ -312,22 +685,24 @@ class ObdParser {
     }
     return true;
   }
-static bool isValidVin(String vin) {
-  final value = vin.trim().toUpperCase();
 
-  if (value.length != 17) return false;
+  static bool isValidVin(String vin) {
+    final value = vin.trim().toUpperCase();
 
-  if (!RegExp(r'^[A-HJ-NPR-Z0-9]{17}$').hasMatch(value)) {
-    return false;
+    if (value.length != 17) return false;
+
+    if (!RegExp(r'^[A-HJ-NPR-Z0-9]{17}$').hasMatch(value)) {
+      return false;
+    }
+
+    // رفض النتائج الوهمية مثل UUUUUUUUUUUUUUUUU
+    if (value.split('').toSet().length < 5) {
+      return false;
+    }
+
+    return true;
   }
 
-  // رفض النتائج الوهمية مثل UUUUUUUUUUUUUUUUU
-  if (value.split('').toSet().length < 5) {
-    return false;
-  }
-
-  return true;
-}
   /// تحليل VIN من رد OBD-II القياسي.
   // static String parseVin(String response) {
   //   // تجميع الإطارات المرقّمة أولاً؛ إزالة \n بشكل مباشر تدمج آخر بايت
@@ -378,48 +753,49 @@ static bool isValidVin(String vin) {
 
   //   return cleanedVin.length == 17 ? cleanedVin : cleanedVin.substring(0, 17);
   // }
-static String parseVin(String response) {
-  final merged = _mergeFrames(response).join(' ');
+  static String parseVin(String response) {
+    final merged = _mergeFrames(response).join(' ');
 
-  if (isError(merged)) {
-    throw const ObdProtocolException(
-      'تعذر قراءة رقم الهيكل VIN.',
+    if (isError(merged)) {
+      throw const ObdProtocolException(
+        'تعذر قراءة رقم الهيكل VIN.',
+      );
+    }
+
+    final bytes = hexBytes(merged);
+
+    final markerIndex = _indexOf(
+      bytes,
+      const [0x49, 0x02, 0x01],
     );
+
+    if (markerIndex < 0) {
+      throw const ObdProtocolException(
+        'رد VIN غير مكتمل أو لا يستخدم التنسيق القياسي.',
+      );
+    }
+
+    final start = markerIndex + 3;
+
+    if (bytes.length < start + 17) {
+      throw const ObdProtocolException(
+        'لم يتم العثور على رقم VIN كامل.',
+      );
+    }
+
+    final vinBytes = bytes.sublist(start, start + 17);
+
+    final vin = String.fromCharCodes(vinBytes);
+
+    if (!isValidVin(vin)) {
+      throw const ObdProtocolException(
+        'رقم VIN المستخرج غير صالح.',
+      );
+    }
+
+    return vin;
   }
 
-  final bytes = hexBytes(merged);
-
-  final markerIndex = _indexOf(
-    bytes,
-    const [0x49, 0x02, 0x01],
-  );
-
-  if (markerIndex < 0) {
-    throw const ObdProtocolException(
-      'رد VIN غير مكتمل أو لا يستخدم التنسيق القياسي.',
-    );
-  }
-
-  final start = markerIndex + 3;
-
-  if (bytes.length < start + 17) {
-    throw const ObdProtocolException(
-      'لم يتم العثور على رقم VIN كامل.',
-    );
-  }
-
-  final vinBytes = bytes.sublist(start, start + 17);
-
-  final vin = String.fromCharCodes(vinBytes);
-
-  if (!isValidVin(vin)) {
-    throw const ObdProtocolException(
-      'رقم VIN المستخرج غير صالح.',
-    );
-  }
-
-  return vin;
-}
   /// تحليل نصي مباشر لرد أمر "VIN" في فيرموير Freematics.
   ///
   /// فيرموير telelogger يرد بنص VIN مباشرة (17 محرفاً) أو "N/A"،
@@ -437,44 +813,88 @@ static String parseVin(String response) {
   //       .firstMatch(cleaned.toUpperCase());
   //   return match?.group(0);
   // }
-static String? parsePlainVin(String response) {
-  final cleaned = _cleanResponse(response);
+  static String? parsePlainVin(String response) {
+    final cleaned = _cleanResponse(response);
 
-  if (isError(cleaned)) {
+    if (isError(cleaned)) {
+      return null;
+    }
+
+    final matches = RegExp(
+      r'[A-HJ-NPR-Z0-9]{17}',
+    ).allMatches(cleaned.toUpperCase());
+
+    for (final match in matches) {
+      final vin = match.group(0)!;
+
+      // رفض النتائج المتكررة والوهمية
+      if (vin.split('').toSet().length < 5) {
+        continue;
+      }
+
+      return vin;
+    }
+
     return null;
   }
 
-  final matches = RegExp(
-    r'[A-HJ-NPR-Z0-9]{17}',
-  ).allMatches(cleaned.toUpperCase());
+  /// فك خريطة "الأوامر المدعومة": كل بايت يحمل 8 بتات (MSB أولاً)،
+  /// البت الأول في أول بايت = PID (01)، الأخير في البايت الرابع =
+  /// PID (0x20). يعيد قائمة أرقام PIDs المميزة بالبتات المجابوبة.
+  static List<int> _decodeSupportedPids(
+    List<int> bitmap,
+    int firstPid,
+  ) {
+    if (bitmap.isEmpty) return const [];
 
-  for (final match in matches) {
-    final vin = match.group(0)!;
-
-    // رفض النتائج المتكررة والوهمية
-    if (vin.split('').toSet().length < 5) {
-      continue;
+    final supported = <int>[];
+    for (var i = 0; i < bitmap.length; i++) {
+      for (var bit = 0; bit < 8; bit++) {
+        if ((bitmap[i] & (0x80 >> bit)) != 0) {
+          supported.add(firstPid + i * 8 + bit);
+        }
+      }
     }
-
-    return vin;
+    return supported;
   }
 
-  return null;
-}
+  /// صياغة قائمة الأوامر المدعومة كنص عربي مقروء: كل رقم بصيغته
+  /// الست عشرية القياسية (مثل "0C" يعني 010C).
+  static String _supportedPidsText(
+    List<int> supported,
+    int from,
+    int to,
+  ) {
+    final pids = supported.where((p) => p >= from && p <= to).toList();
+    final items = pids
+        .map((p) => p.toRadixString(16).padLeft(2, '0').toUpperCase())
+        .join('، ');
+    final hexFrom = from.toRadixString(16).padLeft(2, '0').toUpperCase();
+    final hexTo = to.toRadixString(16).padLeft(2, '0').toUpperCase();
+    return 'مدعوم (${pids.length} أمراً في النطاق $hexFrom–$hexTo): $items';
+  }
+
+  /// عدّاد البتات المجابوبة في بايت واحد.
+  static int _bitCount(int byte) {
+    var count = 0;
+    var working = byte & 0xFF;
+    while (working != 0) {
+      count += working & 0x01;
+      working >>= 1;
+    }
+    return count;
+  }
+
   /// البحث عن تسلسل بايتات داخل قائمة.
   static int _indexOf(
-      List<int> source,
-      List<int> pattern,
-      ) {
+    List<int> source,
+    List<int> pattern,
+  ) {
     if (pattern.isEmpty || pattern.length > source.length) {
       return -1;
     }
 
-    for (
-    var i = 0;
-    i <= source.length - pattern.length;
-    i++
-    ) {
+    for (var i = 0; i <= source.length - pattern.length; i++) {
       var found = true;
 
       for (var j = 0; j < pattern.length; j++) {
@@ -492,17 +912,18 @@ static String? parsePlainVin(String response) {
     return -1;
   }
 
-    /// تحويل الرد القادم من Freematics إلى صيغة OBD الخام المطلوبة
-    /// من الـ Backend حصراً ("41 0C 1A F8" مثلاً).
-    /// أي رد لا يمكن ترميزه بهذه الصيغة يعيد "" (لا يُرسَل للـ API إطلاقاً).
-    ///
-    /// قواعد الترميز القياسية (JE1979 / ELM327):
-    /// - RPM  (0x0C): (A*256+B)/4
-    /// - حرارة السائل/الهواء (0x05/0x0F): A-40
-    /// - السرعة (0x0D)، ضغط السحب (0x0B)، البارومتر (0x33): A
-    /// - الخانق/الحمل/مستوى الوقود (0x04/0x11/0x2F): A*100/255
-    /// - الجهد (0x42): (A*256+B)/1000
-    ///   "BATT" من فيرموير (فولت مباشرة) يُرمز بصيغة 0x42 نفسها.
+  /// تحويل الرد القادم من Freematics إلى صيغة OBD الخام المطلوبة
+  /// من الـ Backend حصراً ("41 0C 1A F8" مثلاً).
+  /// أي رد لا يمكن ترميزه بهذه الصيغة يعيد "" (لا يُرسَل للـ API إطلاقاً).
+  ///
+  /// قواعد الترميز القياسية (JE1979 / ELM327):
+  /// - RPM  (0x0C): (A*256+B)/4
+  /// - حرارة السائل/الهواء (0x05/0x0F): A-40
+  /// - تعديل الوقود قصير/طويل المدى (0x06/0x07): A-128
+  /// - السرعة (0x0D)، ضغط السحب (0x0B)، البارومتر (0x33): A
+  /// - الخانق/الحمل/مستوى الوقود (0x04/0x11/0x2F): A*100/255
+  /// - الجهد (0x42): (A*256+B)/1000
+  ///   "BATT" من فيرموير (فولت مباشرة) يُرمز بصيغة 0x42 نفسها.
   static String toRawObdResponse(String command, String response) {
     final cmd = command.trim().toUpperCase();
     final resp = response.trim();
@@ -553,6 +974,10 @@ static String? parsePlainVin(String response) {
       case 0x0F: // حرارة الهواء = A - 40
         return '41 $pidHex ${hex(value.round() + 40)}';
 
+      case 0x06: // STFT = A - 128
+      case 0x07: // LTFT = A - 128
+        return '41 $pidHex ${hex(value.round() + 128)}';
+
       case 0x04: // الحمل = A*100/255
       case 0x11: // الخانق = A*100/255
       case 0x2F: // مستوى الوقود = A*100/255
@@ -574,5 +999,3 @@ static String? parsePlainVin(String response) {
     }
   }
 }
-
-

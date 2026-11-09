@@ -21,10 +21,11 @@ lib/
     history_screen.dart         ← سجل التشخيص مع بحث مُخفَّف (300ms)
     settings_screen.dart        ← المظهر (فاتح/داكن/النظام)، المنفذ اليدوي، سجل BLE
   widgets/common.dart           ← مكونات مشتركة (ترويسات، شرائح، حالات فراغ...)
+  services/dtc_analysis_service.dart ← عميل POST /api/analyze/dtc (تحليل أكواد 03)
   services/dtc_repository.dart  ← واجهة خدمة معلومات الأعطال (غير مهيأة بعد)
+  models/dtc_analysis.dart      ← نماذج AnalyzeDtcSchema / DtcFaultSchema
   ble_obd_service.dart          ← بدون تغيير: BLE/GATT (ABF0/FFE1/FFE2)
   obd_protocol.dart             ← بدون تغيير: فك DTC/PID/VIN
-  ObdHttpService.dart           ← بدون تغيير: بث Wi-Fi (/api/live)
   obd_analysis_api.dart         ← بدون تغيير: تحليل الردود عبر API
   history_repository.dart       ← بدون تغيير: تخزين محلي (SharedPreferences)
 ```
@@ -34,14 +35,36 @@ lib/
 - البحث/الاتصال/الفصل عبر BLE ومنطق خدمة ABF0 والخصائص FFE1/FFE2.
 - فحص أكواد الأعطال بالكامل (03 ثم DTCS? مع فحوص صحة الرد والرسائل التشخيصية).
 - قراءة PID (RPM/السرعة/الحرارة/...) وجهد البطارية و VIN.
-- البيانات الحية عبر BLE كل 5 ثوانٍ (RPM/سرعة/جهد).
-- البث الحي عبر Wi-Fi والتحكم بتشغيله.
+- البيانات الحية عبر BLE كل 5 ثوانٍ (RPM/سرعة/حرارة التبريد/جهد).
 - تحليل الردود عبر API (أصبح معروضاً في بطاقة «التحليل الذكي»).
 - المنفذ اليدوي ELM327 وسجل BLE الفني (نُقلا إلى شاشة الإعدادات).
 - سجل العمليات المحلي (عرض/بحث/نسخ/مسح).
 - الأجهزة: عرض أول 3 مع «عرض المزيد» ورسائل الأذونات/عدم وجود أجهزة.
 
-## 3) المطلوب لربط خدمة معلومات الأعطال (Fault Details API)
+## 3) تحليل أكواد الأعطال (03) عبر `/api/analyze/dtc`
+
+هذا المسار خاص بأوامر الأعطال فقط (`03` و`DTCS?` و`DTC?`)؛ باقي
+الأوامر تبقى على خدمة تحليل الردود القديمة بلا تغيير.
+
+- الطلب: `POST https://backend-obd.onrender.com/api/analyze/dtc`
+- الجسم (مطابق `InputAnalyzeDtcSchema`): `{ "codes": ["P0301", "P0171"] }`
+  (مصفوفة نصوص، بحد أقصى 100، والخدمة تعيد «السيارة سليمة» عند الفراغ).
+- الأكواد تُفكّ محلياً من رد الجهاز أولاً وتُعرض فوراً، ثم يُرسَل الطلب
+  في الخلفية وتُحدَّث الشاشة تلقائياً عند وصول الاستجابة (مع حالات
+  تحميل/خطأ/إعادة محاولة).
+- الاستجابة تُقرأ كما هي (`success`, `codes`, `status`, `title`,
+  `description`, `totalFaults`, `faults[]`) ويعرض كل عطل في قائمة
+  الأعطال سطراً بسطر، مع كل حقول `DtcFaultSchema` في شاشة التفاصيل
+  (`category`, `type`, `nameEn`, `title`, `description`, `system`,
+  `meaning`, `severity`, `severityPercentage`, `severityExplanation`,
+  `possibleCauses`, `possibleSymptoms`, `diagnosticSteps`, `solutions`,
+  `status`, `confidence`) — بلا أي حقل مضاف.
+- مدخلات فشل كود واحد `{code, success:false, error}` تُعرض كما هي.
+- الملفات: `lib/models/dtc_analysis.dart`،
+  `lib/services/dtc_analysis_service.dart`، وطريقة
+  `AppController.analyzeDtcCodes`، وشاشتا `faults`/`fault_details`.
+
+## 4) المطلوب لربط خدمة معلومات الأعطال (Fault Details API)
 
 الملف: `lib/services/dtc_repository.dart` — الواجهة جاهزة، والتنفيذ
 الحالي يرمي `DtcRepositoryNotConfigured` (لا بيانات مصطنعة).
@@ -73,16 +96,17 @@ lib/
 `timeout` و`http` + تحويل `DtcInfo.fromJson`. الواجهة تعرض
 تلقائياً حالات التحميل/الخطأ/إعادة المحاولة/عدم وجود الكود.
 
-## 4) البيانات التي لا تُختلق
+## 5) البيانات التي لا تُختلق
 
 - لا تظهر أجهزة وهمية؛ القائمة من `FlutterBluePlus` فقط.
 - لا تظهر أعطال أو «سيارة سليمة» قبل فحص فعلي (`hasReadDtc`).
 - جهوزية الانبعاثات تعرض الرد الخام فقط حتى تُربَط خدمة فك PID 01.
-- الخطورة/الحالة في الأعطال تظهر «غير متوفرة» حتى توفر بيانات الخدمة.
-- تفاصيل العطل تعرض استنباطاً معيارياً (حرف الكود ← النظام) مع
+- الخطورة/الحالة في الأعطال تُعرض فقط من حقول استجابة خدمة التحليل،
+  ولا تُختلق عند غيابها.
+- تفاصيل العطل اليدوي تعرض استنباطاً معيارياً (حرف الكود ← النظام) مع
   تنبيه أن الأسباب تحتاج فحصاً فعلياً وقد تختلف بحسب المصنّع.
 
-## 5) المظهر
+## 6) المظهر
 
 - فاتح/داكن/حسب النظام، محفوظ في SharedPreferences تحت `app_theme_mode_v1`.
 - الهوية: زيتوني `#556B2F` / داكن `#354522` / فاتح `#8FA765`،

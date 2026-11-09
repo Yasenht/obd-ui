@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../controllers/app_controller.dart';
 import '../controllers/app_scope.dart';
+import '../obd_protocol.dart';
 import '../theme/app_colors.dart';
 import '../widgets/common.dart';
 
@@ -187,16 +188,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _sendManual(AppController controller) async {
-    final response = await controller.sendManualCommand(
-      _manualCommandController.text,
-    );
+    final typed = _manualCommandController.text;
+    final response = await controller.sendManualCommand(typed);
     _manualCommandController.clear();
     if (!mounted) return;
     if (response != null) {
+      // النتيجة تُشرح بمعناها ووحدتها (مثل "حرارة سائل التبريد: 76 °C")
+      // بدل عرض الكود أو الرقم فقط.
+      final reading = controller.lastPidReading;
+      final summary = reading != null
+          ? '${reading.label}: ${reading.displayValue}'
+          : ObdParser.describeCommandResult(typed, response);
       showResultSheet(
         context,
         title: 'الرد الواصل',
         success: true,
+        summary: summary,
         raw: response,
       );
     } else {

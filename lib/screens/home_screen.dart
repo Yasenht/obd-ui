@@ -8,6 +8,7 @@ import '../widgets/common.dart';
 import 'fault_details_screen.dart';
 import 'home_widgets/home_sections.dart';
 import 'main_shell.dart';
+import '../services/vehicle_catalog.dart';
 
 /// إجراءات الفحص السريع المتاحة في الشاشة الرئيسية.
 enum QuickScanAction { dtc, engineStatus, liveData, emissions, vehicleInfo }
@@ -26,7 +27,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final FocusNode _dtcCodeFocus = FocusNode();
   bool _showAllDevices = false;
 
-  /// نمط كود العطل المقصود هداياً في حقل الإدخال (P0301 مثلاً).
+  /// نمط كود العطل القياسي في حقل الإدخال (حرف ثم 4 خانات).
   static final RegExp _dtcPattern =
       RegExp(r'^[PCBU][0-3][0-9A-F]{3}$', caseSensitive: false);
 
@@ -126,31 +127,29 @@ class _HomeScreenState extends State<HomeScreen> {
         break;
 
       case QuickScanAction.emissions:
-        // جهوزية الانبعاثات: Mode-01 PID 01 (حالة MIL + جاهزية المراقبات).
-        // الرد يُعرض خاماً مع توضيح — لا يُفهم ضمنياً إلا بعد تهيئة
-        // محلله عبر الـ API (مستقبلياً عبر تحليل نفس خدمة الأوامر).
-        final raw = await controller.executeCommand(
-          'فحص جهوزية الانبعاثات (PID 01)',
-          '0101\r',
+        // جهوزية الانبعاثات: Mode-01 PID 01 (حالة MIL + عدد الأكواد).
+        // يُفك عبر الكتالوج المحلي: مصباح العطل مدار/مطفأ وعدد الأكواد.
+        final reading = await controller.readPid(
+          0x01,
+          'فحص جهوزية الانبعاثات (MIL وأكواد الأعطال)',
         );
         if (!mounted) return;
-        if (raw != null) {
+        if (reading != null) {
           showResultSheet(
             context,
             title: 'جهوزية الانبعاثات',
             success: true,
-            summary: 'وصل رد من الجهاز — انظر الرد الخام أدناه.',
-            raw: raw,
-            note: 'لا يزال فك صيغة PID 01 (جاهزية أنظمة الانبعاثات) غير '
-                'مهيأَ محلياً؛ نتائج الانبعاثات النهائية تُعرض بعد ربط '
-                'خدمة التحليل الخاصة بالجهوزية.',
+            summary: '${reading.label}: ${reading.displayValue}',
+            raw: reading.raw,
+            note: 'MIL مضاء يعني أن وحدة التحكم تحتفظ بأكواد أعطال — '
+                'افتح تبويب «الأعطال» لعرض تفصيلها عبر خدمة التحليل.',
           );
         } else {
           showResultSheet(
             context,
             title: 'جهوزية الانبعاثات',
             success: false,
-            summary: controller.error ?? 'فشل الطلب — تأكد من الاتصال.',
+            summary: controller.error ?? 'فشل فحص جهوزية الانبعاثات.',
           );
         }
         break;
@@ -181,13 +180,13 @@ class _HomeScreenState extends State<HomeScreen> {
   void _submitManualCode() {
     final text = _dtcCodeController.text.trim().toUpperCase();
     if (text.isEmpty) {
-      _showValidationHint('أدخل كود العطل أولاً — مثال: P0301');
+      _showValidationHint('أدخل كود العطل أولاً');
       return;
     }
     if (!_dtcPattern.hasMatch(text)) {
       _showValidationHint(
           'كود غير صالح: "$text". الصيغة القياسية: حرف (P/C/B/U) '
-          'ثم 4 خانات، مثل P0301.');
+          'ثم 4 خانات.');
       return;
     }
     FocusManager.instance.primaryFocus?.unfocus();
@@ -262,6 +261,17 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 20),
 
+                // قسم معلومات المركبة: الماركة ثم الموديل ثم سنة الصنع،
+                // ومركبات 2005 وما قبلها محجوبة عن كل الأوامر.
+                SectionHeader(
+                  title: 'معلومات المركبة',
+                  subtitle: 'ماركة وموديل وسنة الصنع — لتحديد دعم الفحص',
+                  icon: Icons.directions_car_rounded,
+                ),
+                const SizedBox(height: 10),
+                _buildVehicleCard(context, controller),
+                const SizedBox(height: 20),
+
                 liveDataSection(
                   context,
                   key: HomeSections.liveSectionKey,
@@ -279,7 +289,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                 SectionHeader(
                   title: 'البحث عن عطل يدوياً',
-                  subtitle: 'أدخل كود عطل قياسي مثل P0301 لعرض تفاصيله',
+                  subtitle: 'أدخل كود عطل قياسي لعرض تفاصيله',
                   icon: Icons.search_rounded,
                 ),
                 const SizedBox(height: 10),
@@ -365,6 +375,191 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // ---- قسم معلومات المركبة (الماركة/الموديل/سنة الصنع) ----
+
+  Widget _buildVehicleCard(BuildContext context, AppController controller) {
+    final palette = Palette.of(context);
+    final make = controller.vehicleMake;
+    final model = controller.vehicleModel;
+    final year = controller.vehicleYear;
+    final models = make == null ? const <String>[] : VehicleCatalog.modelsFor(make);
+    final years = VehicleCatalog.years();
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 1) الماركة — قائمة الماركات الشائعة.
+            DropdownButtonFormField<String>(
+              initialValue: make,
+              decoration: const InputDecoration(
+                labelText: 'ماركة السيارة',
+                prefixIcon: Icon(Icons.directions_car_rounded, size: 19),
+              ),
+              items: VehicleCatalog.makes
+                  .map((m) => DropdownMenuItem<String>(
+                        value: m,
+                        child: Text(
+                          m,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: palette.text,
+                          ),
+                          textDirection: TextDirection.ltr,
+                        ),
+                      ))
+                  .toList(),
+              onChanged: controller.busy
+                  ? null
+                  : (value) => controller.setVehicle(make: value),
+            ),
+            const SizedBox(height: 10),
+
+            // 2) الموديل — يتبع الماركة المختارة.
+            DropdownButtonFormField<String>(
+              initialValue: model,
+              decoration: const InputDecoration(
+                labelText: 'الموديل',
+                prefixIcon: Icon(Icons.commute_rounded, size: 19),
+              ),
+              items: models
+                  .map((m) => DropdownMenuItem<String>(
+                        value: m,
+                        child: Text(
+                          m,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: palette.text,
+                          ),
+                          textDirection: TextDirection.ltr,
+                        ),
+                      ))
+                  .toList(),
+              onChanged:
+                  make == null || controller.busy ? null : (value) => controller.setVehicle(model: value),
+              disabledHint: Text(
+                make == null ? 'اختر الماركة أولاً' : 'اختر موديلاً',
+                style: TextStyle(fontSize: 12, color: palette.textMuted),
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // 3) سنة الصنع — تنازلياً من السنة الحالية إلى 1960.
+            DropdownButtonFormField<int>(
+              initialValue: year,
+              decoration: const InputDecoration(
+                labelText: 'سنة الصنع',
+                prefixIcon: Icon(Icons.event_available_rounded, size: 19),
+              ),
+              items: years
+                  .map((y) => DropdownMenuItem<int>(
+                        value: y,
+                        child: Text(
+                          '$y',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: palette.text,
+                          ),
+                          textDirection: TextDirection.ltr,
+                        ),
+                      ))
+                  .toList(),
+              onChanged:
+                  make == null || controller.busy ? null : (value) => controller.setVehicle(year: value),
+              disabledHint: Text(
+                make == null ? 'اختر الماركة أولاً' : 'اختر سنة الصنع',
+                style: TextStyle(fontSize: 12, color: palette.textMuted),
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (controller.hasVehicleSelection) ...[
+              // حالة الاختيار الحالي: ملخّص + قرار الدعم.
+              Row(
+                children: [
+                  Icon(
+                    Icons.directions_car_rounded,
+                    size: 15,
+                    color: controller.vehicleUnsupported
+                        ? AppColors.error
+                        : palette.onPrimary,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'المركبة المختارة: ${controller.vehicleLabel}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: palette.text,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'مسح الاختيار',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => controller.clearVehicle(),
+                    icon: Icon(Icons.close_rounded,
+                        size: 16, color: palette.textMuted),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: controller.vehicleUnsupported
+                      ? AppColors.error.withOpacity(0.08)
+                      : palette.onPrimary.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(kRadiusSmall),
+                  border: Border.all(
+                    color: controller.vehicleUnsupported
+                        ? AppColors.error.withOpacity(0.3)
+                        : palette.onPrimary.withOpacity(0.3),
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      controller.vehicleUnsupported
+                          ? Icons.block_rounded
+                          : Icons.verified_rounded,
+                      size: 16,
+                      color: controller.vehicleUnsupported
+                          ? AppColors.error
+                          : palette.onPrimary,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        controller.vehicleUnsupported
+                            ? 'مركبات سنة 2005 وما قبلها لا تدعم بروتوكول '
+                                'OBD-II — كل الأوامر والفحوصات ممنوعة. '
+                                'اختر مركبة من سنة 2006 فأحدث.'
+                            : 'المركبة مدعومة — الفحص والأوامر متاحة '
+                                '(مسموح اعتباراً من سنة 2006).',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          height: 1.5,
+                          color: controller.vehicleUnsupported
+                              ? AppColors.error
+                              : palette.text,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   // ---- شبكة الفحص السريع ----
 
   Widget _buildQuickScanGrid(BuildContext context, AppController controller) {
@@ -385,7 +580,7 @@ class _HomeScreenState extends State<HomeScreen> {
         QuickScanAction.liveData,
         Icons.monitor_heart_rounded,
         'بيانات حية',
-        'RPM/سرعة/جهد مباشر'
+        'RPM/سرعة/حرارة/جهد مباشر'
       ),
       (
         QuickScanAction.emissions,
@@ -455,7 +650,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: palette.text,
                     ),
                     decoration: const InputDecoration(
-                      hintText: 'مثال: P0301',
+                      hintText: 'مثال: P0420',
                       counterText: '',
                       prefixIcon: Icon(Icons.tag_rounded),
                     ),

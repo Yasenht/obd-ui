@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../controllers/app_controller.dart';
 import '../controllers/app_scope.dart';
+import '../models/dtc_analysis.dart';
 import '../theme/app_colors.dart';
 import '../widgets/common.dart';
 import 'fault_details_screen.dart';
 
+/// أنظمة الكود المعيارية (تُستخدم فقط في شاشة التفاصيل اليدوية
+/// عند غياب بيانات خدمة التحليل — لا تُعرض ضمن بيانات الأعطال).
 enum DtcSystem {
   powertrain('P', 'المحرك / ناقل الحركة', Icons.car_repair_rounded),
   chassis('C', 'الشاسي', Icons.directions_rounded),
@@ -27,7 +30,8 @@ enum DtcSystem {
   }
 }
 
-/// الشاشة الثانية: قائمة أعطال السيارة المكتشفة من آخر فحص فعلي.
+/// الشاشة الثانية: قائمة أعطال السيارة من آخر فحص فعلي، مع تفاصيل
+/// كل كود من استجابة `POST /api/analyze/dtc`.
 class FaultsScreen extends StatelessWidget {
   const FaultsScreen({super.key});
 
@@ -88,167 +92,449 @@ class FaultsScreen extends StatelessWidget {
       return Padding(
         padding: const EdgeInsets.all(24),
         child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              EmptyState(
-                icon: Icons.pending_actions_rounded,
-                title: 'لم يُجرَ فحص بعد',
-                message: 'لا يمكن عرض الأعطال قبل تنفيذ فحص فعلي عبر '
-                    'الاتصال بجهاز التشخيص OBD-II.',
-                action: SizedBox(
-                  height: 46,
-                  child: ElevatedButton.icon(
-                    onPressed:
-                        controller.busy ? null : () => controller.readDtc(),
-                    icon: const Icon(Icons.bolt_rounded, size: 20),
-                    label: const Text('فحص أكواد الأعطال الآن'),
-                  ),
-                ),
+          child: EmptyState(
+            icon: Icons.pending_actions_rounded,
+            title: 'لم يُجرَ فحص بعد',
+            message: 'لا يمكن عرض الأعطال قبل تنفيذ فحص فعلي عبر '
+                'الاتصال بجهاز التشخيص OBD-II.',
+            action: SizedBox(
+              height: 46,
+              child: ElevatedButton.icon(
+                onPressed: controller.busy ? null : () => controller.readDtc(),
+                icon: const Icon(Icons.bolt_rounded, size: 20),
+                label: const Text('فحص أكواد الأعطال الآن'),
               ),
-            ],
+            ),
           ),
         ),
       );
     }
 
     final codes = controller.dtcCodes;
+    final analysis = controller.dtcAnalysis;
+
     if (codes.isEmpty) {
-      return Padding(
+      return ListView(
         padding: const EdgeInsets.all(24),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              EmptyState(
-                icon: Icons.verified_rounded,
-                title: 'لا توجد أعطال مسجلة',
-                message:
-                    'نتيجة الفحص الفعلي (${_scanTimeText(controller.lastDtcScanTime)}) '
+        children: [
+          EmptyState(
+            icon: Icons.verified_rounded,
+            title: analysis?.title.isNotEmpty == true
+                ? analysis!.title
+                : 'لا توجد أعطال مسجلة',
+            message: analysis?.description.isNotEmpty == true
+                ? analysis!.description
+                : 'نتيجة الفحص الفعلي (${_scanTimeText(controller.lastDtcScanTime)}) '
                     'تُبيّن أن نظام المركبة لا يحتفظ بأكواد أعطال حالياً.',
-              ),
-              Text(
-                'لا يمكن اعتبار ذلك ضماناً دائماً — كرر الفحص دورياً.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: palette.textMuted,
-                ),
-              ),
-            ],
+            compact: true,
           ),
-        ),
+          if (controller.dtcAnalysisLoading) ...[
+            const SizedBox(height: 14),
+            const Center(
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          ],
+          if (controller.dtcAnalysisError != null) ...[
+            const SizedBox(height: 14),
+            _AnalysisErrorCard(
+              message: controller.dtcAnalysisError!,
+              onRetry: () => controller.analyzeDtcCodes(codes),
+            ),
+          ],
+          const SizedBox(height: 10),
+          Text(
+            'لا يمكن اعتبار ذلك ضماناً دائماً — كرر الفحص دورياً.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11, color: palette.textMuted),
+          ),
+        ],
       );
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      itemCount: codes.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        final code = codes[index];
-        final system = DtcSystem.fromCode(code);
-        return _FaultTile(
-          code: code,
-          system: system,
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => FaultDetailsScreen(code: code),
-              ),
+    return RefreshIndicator(
+      onRefresh: () => controller.readDtc(),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+        children: [
+          // ملخص استجابة الخدمة (العنوان/الوصف/العدد) كما وردت.
+          if (analysis != null) _AnalysisHeader(analysis: analysis),
+
+          if (controller.dtcAnalysisLoading) ...[
+            const SizedBox(height: 8),
+            _AnalysisLoadingBar(count: codes.length),
+          ],
+
+          if (controller.dtcAnalysisError != null) ...[
+            const SizedBox(height: 8),
+            _AnalysisErrorCard(
+              message: controller.dtcAnalysisError!,
+              onRetry: () => controller.analyzeDtcCodes(codes),
+            ),
+          ],
+
+          const SizedBox(height: 4),
+          ...codes.map((code) {
+            return _FaultTile(
+              code: code,
+              fault: analysis?.faultForCode(code),
+              analysisLoading: controller.dtcAnalysisLoading,
+              analysisFailed: controller.dtcAnalysisError != null,
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => FaultDetailsScreen(code: code),
+                  ),
+                );
+              },
             );
-          },
-        );
-      },
+          }),
+        ],
+      ),
     );
   }
 
-  String _scanTimeText(DateTime? time) {
-    if (time == null) return 'غير معروف';
-    return formatRecordTime(time.toLocal());
-  }
+  String _scanTimeText(DateTime? time) =>
+      time == null ? 'غير معروف' : formatRecordTime(time.toLocal());
 }
 
 // ============================================================
-/// بطاقة عطل واحدة في القائمة.
+// ترويسة استجابة الخدمة
 // ============================================================
 
-class _FaultTile extends StatelessWidget {
-  const _FaultTile({
-    required this.code,
-    required this.system,
-    required this.onTap,
-  });
+class _AnalysisHeader extends StatelessWidget {
+  const _AnalysisHeader({required this.analysis});
 
-  final String code;
-  final DtcSystem system;
-  final VoidCallback onTap;
+  final DtcAnalysisResult analysis;
 
   @override
   Widget build(BuildContext context) {
     final palette = Palette.of(context);
-    return Card(
-      child: InkWell(
-        onTap: onTap,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Card(
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
-                width: 44,
-                height: 44,
+                width: 38,
+                height: 38,
                 decoration: BoxDecoration(
                   color: AppColors.error.withOpacity(0.09),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(11),
                 ),
-                child: Icon(system.icon, color: AppColors.error, size: 22),
+                child: const Icon(Icons.report_gmailerrorred_rounded,
+                    color: AppColors.error, size: 21),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        DtcCodeBadge(code: code),
-                        const SizedBox(width: 8),
-                        // الخطورة غير متوفرة محلياً — تتطلب ربط خدمة الأعطال.
-                        Text(
-                          'الخطورة: غير محدد',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: palette.textMuted,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
                     Text(
-                      system.displayName,
+                      analysis.title.isNotEmpty
+                          ? analysis.title
+                          : '${analysis.totalFaults} أعطال',
                       style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13.5,
                         color: palette.text,
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    if (analysis.description.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        analysis.description,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: palette.textMuted,
+                          height: 1.45,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 6),
                     Text(
-                      'اضغط للتفاصيل · الحالة: غير متوفرة (يتطلب ربط API)',
+                      'totalFaults: ${analysis.totalFaults} • status: ${analysis.status}',
                       style: TextStyle(
-                        fontSize: 10.5,
+                        fontSize: 10,
+                        fontFamily: 'monospace',
                         color: palette.textMuted,
                       ),
+                      textDirection: TextDirection.ltr,
                     ),
                   ],
                 ),
               ),
-              Icon(
-                Icons.chevron_left_rounded,
-                color: palette.textMuted,
-              ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _AnalysisLoadingBar extends StatelessWidget {
+  const _AnalysisLoadingBar({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = Palette.of(context);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'جارٍ تحليل $count ${count == 1 ? 'كود' : 'أكواد'} عبر خدمة /api/analyze/dtc...',
+                style: TextStyle(fontSize: 12, color: palette.textMuted),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AnalysisErrorCard extends StatelessWidget {
+  const _AnalysisErrorCard({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.cloud_off_rounded,
+                color: AppColors.warning, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    message,
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.warning, height: 1.45),
+                  ),
+                  const SizedBox(height: 6),
+                  OutlinedButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh_rounded, size: 16),
+                    label: const Text('إعادة تحليل الأكواد'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+/// بطاقة عطل واحدة: كود + بيانات الاستجابة لكل كود.
+/// ============================================================
+
+class _FaultTile extends StatelessWidget {
+  const _FaultTile({
+    required this.code,
+    required this.fault,
+    required this.analysisLoading,
+    required this.analysisFailed,
+    required this.onTap,
+  });
+
+  final String code;
+  final DtcFault? fault;
+  final bool analysisLoading;
+  final bool analysisFailed;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = Palette.of(context);
+    final data = fault;
+    final useEnglishName = data?.nameEn?.isNotEmpty == true;
+    final headline = useEnglishName
+        ? data!.nameEn!
+        : (data?.title?.isNotEmpty == true ? data!.title! : code);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  DtcCodeBadge(code: code),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      headline,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5,
+                        color: palette.text,
+                      ),
+                      textDirection: useEnglishName ? TextDirection.ltr : null,
+                    ),
+                  ),
+                  Icon(Icons.chevron_left_rounded,
+                      color: palette.textMuted, size: 18),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (data == null)
+                _StatusLine(
+                  icon: analysisFailed
+                      ? Icons.error_outline_rounded
+                      : Icons.hourglass_top_rounded,
+                  color: analysisFailed ? AppColors.warning : palette.textMuted,
+                  text: analysisFailed
+                      ? 'تعذر جلب تفاصيل هذا الكود من خدمة التحليل.'
+                      : analysisLoading
+                          ? 'جارٍ جلب التفاصيل من الخدمة...'
+                          : 'لم تُرجع الخدمة تفاصيل لهذا الكود.',
+                )
+              else if (data.failed)
+                _StatusLine(
+                  icon: Icons.error_outline_rounded,
+                  color: AppColors.error,
+                  text: data.error?.isNotEmpty == true
+                      ? data.error!
+                      : 'تعذر تحليل رمز العطل',
+                )
+              else ...[
+                // كل حقل معروض كما ورد من الاستجابة (بلا حقول مضافة).
+                if (data.title?.isNotEmpty == true)
+                  _FieldLine(label: 'العنوان', value: data.title!),
+                if (data.description?.isNotEmpty == true)
+                  _FieldLine(label: 'الوصف', value: data.description!),
+                if (data.system?.isNotEmpty == true)
+                  _FieldLine(label: 'النظام', value: data.system!),
+                if (data.severity?.isNotEmpty == true)
+                  _FieldLine(label: 'الخطورة', value: data.severity!),
+                if (data.severityPercentage != null)
+                  _FieldLine(
+                    label: 'نسبة الخطورة',
+                    value: '${data.severityPercentage!.toStringAsFixed(0)}%',
+                  ),
+                if (data.status?.isNotEmpty == true)
+                  _FieldLine(label: 'الحالة', value: data.status!),
+                if (data.confidence != null)
+                  _FieldLine(
+                    label: 'الثقة',
+                    value: '${(data.confidence! * 100).toStringAsFixed(0)}%',
+                  ),
+                const SizedBox(height: 4),
+                Text(
+                  'اضغط لعرض بقية التفاصيل',
+                  style: TextStyle(fontSize: 10, color: palette.textMuted),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusLine extends StatelessWidget {
+  const _StatusLine({
+    required this.icon,
+    required this.color,
+    required this.text,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(fontSize: 11.5, color: color, height: 1.45),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// سطر «التسمية: القيمة» — يعرض حقل الاستجابة بقيمته.
+class _FieldLine extends StatelessWidget {
+  const _FieldLine({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = Palette.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 84,
+            child: Text(
+              '$label:',
+              style: TextStyle(
+                fontSize: 10.5,
+                color: palette.textMuted,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 11.5,
+                color: palette.text,
+                height: 1.45,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

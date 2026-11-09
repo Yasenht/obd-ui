@@ -6,9 +6,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../ble_obd_service.dart';
 import '../history_repository.dart';
 import '../models.dart';
-import '../ObdHttpService.dart';
+import '../models/dtc_analysis.dart';
 import '../obd_analysis_api.dart';
 import '../obd_protocol.dart';
+import '../services/dtc_analysis_service.dart';
+import '../services/vehicle_catalog.dart';
 
 /// الحالة المشتركة للتطبيق: الاتصال، الفحص، البيانات الحية،
 /// السجل، وإعدادات المظهر.
@@ -18,9 +20,9 @@ import '../obd_protocol.dart';
 /// لم يُغيَّر، فقط فُصل عن ملف الواجهة الأحادي.
 class AppController extends ChangeNotifier {
   final BleObdService bleService = BleObdService();
-  final ObdHttpService httpService = ObdHttpService();
   final ObdAnalysisApi analysisApi = ObdAnalysisApi();
   final HistoryRepository historyRepository = HistoryRepository();
+  final DtcAnalysisService dtcAnalysisService = DtcAnalysisService();
 
   StreamSubscription<List<DiscoveredObdDevice>>? _scanSubscription;
   StreamSubscription<ObdConnectionStatus>? _statusSubscription;
@@ -31,6 +33,81 @@ class AppController extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.dark;
   ThemeMode get themeMode => _themeMode;
 
+  // ---- معلومات المركبة (الماركة/الموديل/سنة الصنع) — محفوظة محلياً ----
+  static const String _vehicleMakeKey = 'vehicle_make_v1';
+  static const String _vehicleModelKey = 'vehicle_model_v1';
+  static const String _vehicleYearKey = 'vehicle_year_v1';
+
+  /// أصغر سنة مدعومة: 2005 وما قبلها لا تدعم الفحص (انظر [VehicleCatalog]).
+  static const int minObdYear = VehicleCatalog.minSupportedYear;
+
+  String? _vehicleMake;
+  String? _vehicleModel;
+  int? _vehicleYear;
+
+  String? get vehicleMake => _vehicleMake;
+  String? get vehicleModel => _vehicleModel;
+  int? get vehicleYear => _vehicleYear;
+
+  /// هل اختار المستخدم مركبة كاملة (ماركة + موديل + سنة)؟
+  bool get hasVehicleSelection =>
+      _vehicleMake != null && _vehicleModel != null && _vehicleYear != null;
+
+  /// وصف المركبة المختارة (مثل "1980 Toyota Corolla") أو null.
+  String? get vehicleLabel =>
+      hasVehicleSelection ? '$_vehicleYear $_vehicleMake $_vehicleModel' : null;
+
+  /// هل المركبة المختارة (إن وُجدت) من سنوات لا تدعم OBD-II؟
+  /// عندئذ تُمنع كل الأوامر والفحوصات حتى يغيّر الاختيار.
+  bool get vehicleUnsupported =>
+      hasVehicleSelection && _vehicleYear! < minObdYear;
+
+  /// تحديث اختيار المركبة: تغيير الماركة يعيد ضبط الموديل.
+  /// القيم غير المتغيّرة تبقى كما هي، ويُحفظ الاختيار محلياً.
+  Future<void> setVehicle({
+    String? make,
+    String? model,
+    int? year,
+  }) async {
+    if (make != null && make != _vehicleMake) {
+      _vehicleMake = make;
+      // قوائم الموديلات تتبع الماركة — إعادة الضبط إجبارية.
+      _vehicleModel = null;
+    }
+    if (model != null) _vehicleModel = model;
+    if (year != null) _vehicleYear = year;
+    notifyListeners();
+
+    await _persistVehicle();
+  }
+
+  /// مسح اختيار المركبة (يعيد السماح بكل الأوامر.
+  Future<void> clearVehicle() async {
+    _vehicleMake = null;
+    _vehicleModel = null;
+    _vehicleYear = null;
+    notifyListeners();
+
+    await _persistVehicle();
+  }
+
+  Future<void> _persistVehicle() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_vehicleMake == null) {
+      await prefs.remove(_vehicleMakeKey);
+      await prefs.remove(_vehicleModelKey);
+      await prefs.remove(_vehicleYearKey);
+      return;
+    }
+    await prefs.setString(_vehicleMakeKey, _vehicleMake!);
+    if (_vehicleModel != null) {
+      await prefs.setString(_vehicleModelKey, _vehicleModel!);
+    }
+    if (_vehicleYear != null) {
+      await prefs.setInt(_vehicleYearKey, _vehicleYear!);
+    }
+  }
+
   Future<void> loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(_themekey);
@@ -40,6 +117,25 @@ class AppController extends ChangeNotifier {
       _themeMode = ThemeMode.system;
     } else if (saved == 'dark') {
       _themeMode = ThemeMode.dark;
+    }
+
+    // استعادة اختيار المركبة المحفوظ (الاختيار الناقص يُستعاد جزئياً).
+    final make = prefs.getString(_vehicleMakeKey);
+    final model = prefs.getString(_vehicleModelKey);
+    final year = prefs.getInt(_vehicleYearKey);
+    if (make != null &&
+        model != null &&
+        year != null &&
+        VehicleCatalog.modelsFor(make).contains(model)) {
+      _vehicleMake = make;
+      _vehicleModel = model;
+      _vehicleYear = year;
+    } else if (make != null && year != null) {
+      // موديل محفوظ بلا ماركة صالحة (قائمة متغيّرة) — استعادة بلا موديل
+      // ليختار المستخدم الموديل من جديد دون فقد الماركة والسنة.
+      _vehicleMake = make;
+      _vehicleModel = null;
+      _vehicleYear = year;
     }
     notifyListeners();
   }
@@ -107,6 +203,16 @@ class AppController extends ChangeNotifier {
   bool _hasReadDtc = false;
   bool get hasReadDtc => _hasReadDtc;
 
+  // ---- تحليل أكواد الأعطال عبر /api/analyze/dtc ----
+  DtcAnalysisResult? _dtcAnalysis;
+  DtcAnalysisResult? get dtcAnalysis => _dtcAnalysis;
+
+  bool _dtcAnalysisLoading = false;
+  bool get dtcAnalysisLoading => _dtcAnalysisLoading;
+
+  String? _dtcAnalysisError;
+  String? get dtcAnalysisError => _dtcAnalysisError;
+
   /// وقت آخر فحص ناجح لأكواد الأعطال.
   DateTime? get lastDtcScanTime => _history
       .where((r) => r.title.contains('أكواد الأعطال') && r.success)
@@ -126,7 +232,11 @@ class AppController extends ChangeNotifier {
     return List.unmodifiable(values);
   }
 
-  // ---- البيانات الحية عبر BLE (RPM/السرعة/الجهد — كل 5 ثوانٍ) ----
+  /// آخر قراءة PID مفكوكة (لعرض معناها في ورقة نتيجة الأوامر اليدوية).
+  PidReading? _lastPidReading;
+  PidReading? get lastPidReading => _lastPidReading;
+
+  // ---- البيانات الحية عبر BLE (RPM/السرعة/حرارة التبريد/الجهد — كل 5 ثوانٍ) ----
   static const Duration _liveRefreshInterval = Duration(seconds: 5);
   Timer? _liveTimer;
   bool _liveEnabled = false;
@@ -137,10 +247,28 @@ class AppController extends ChangeNotifier {
   num? get liveRpm => _liveRpm;
   num? _liveSpeed;
   num? get liveSpeed => _liveSpeed;
+  num? _liveCoolant;
+  num? get liveCoolant => _liveCoolant;
   double? _liveBattery;
   double? get liveBattery => _liveBattery;
   DateTime? _liveLastUpdate;
   DateTime? get liveLastUpdate => _liveLastUpdate;
+
+  // ---- تعديل الوقود (STFT 0106 / LTFT 0107) — قراءة عند ضغط الزر ----
+  num? _liveStft;
+  num? get liveStft => _liveStft;
+  num? _liveLtft;
+  num? get liveLtft => _liveLtft;
+  DateTime? _fuelTrimLastUpdate;
+  DateTime? get fuelTrimLastUpdate => _fuelTrimLastUpdate;
+
+  /// مجموع التعديلين (STFT + LTFT) كنسبة مئوية — مؤشر صحة خليط الوقود.
+  num? get fuelTrimSum => _liveStft == null || _liveLtft == null
+      ? null
+      : _liveStft! + _liveLtft!;
+
+  bool _fuelTrimReading = false;
+  bool get fuelTrimReading => _fuelTrimReading;
 
   // ---- API التحليل (fire-and-forget) ----
   bool get apiLoading => _apiLoading;
@@ -153,20 +281,6 @@ class AppController extends ChangeNotifier {
   String get lastApiCommand => _lastApiCommand;
   String _lastApiRawResponse = '';
   String get lastApiRawResponse => _lastApiRawResponse;
-
-  // ---- البث الحي عبر Wi-Fi (TELELOGGER) ----
-  bool _httpPollingEnabled = true;
-  bool get httpPollingEnabled => _httpPollingEnabled;
-
-  void setHttpPollingEnabled(bool enabled) {
-    _httpPollingEnabled = enabled;
-    if (enabled) {
-      httpService.startPolling(interval: const Duration(milliseconds: 500));
-    } else {
-      httpService.stopPolling();
-    }
-    notifyListeners();
-  }
 
   // ---- السجل ----
   List<InspectionRecord> _history = <InspectionRecord>[];
@@ -236,11 +350,6 @@ class AppController extends ChangeNotifier {
     });
 
     unawaited(_requestRequiredPermissions());
-
-    // بدء سحب البيانات عبر HTTP تلقائياً عند إقلاع الواجهة.
-    if (_httpPollingEnabled) {
-      httpService.startPolling(interval: const Duration(milliseconds: 500));
-    }
   }
 
   Future<void> _requestRequiredPermissions() async {
@@ -258,7 +367,6 @@ class AppController extends ChangeNotifier {
     _statusSubscription?.cancel();
     _debugLogSubscription?.cancel();
     _liveTimer?.cancel();
-    httpService.stopPolling();
     bleService.dispose();
     super.dispose();
   }
@@ -329,6 +437,16 @@ class AppController extends ChangeNotifier {
     String command, {
     Duration? timeout,
   }) async {
+    // حارس الدعم: المركبة المختارة من سنوات لا تدعم OBD-II (2005 وما
+    // قبلها) لا تُرسل إليها أوامر إطلاقاً — اتصال الجهاز وحده متاح.
+    if (vehicleUnsupported) {
+      _error = 'المركبة غير مدعومة: $vehicleLabel (سنة الصنع 2005 وما '
+          'قبلها لا تستخدم بروتوكول OBD-II). تم منع إرسال الأوامر — '
+          'اختر مركبة من سنة 2006 فأحدث من قسم «معلومات المركبة».';
+      notifyListeners();
+      return null;
+    }
+
     if (!_connected) {
       _error = 'اتصل بجهاز BLE أولاً.';
       notifyListeners();
@@ -375,12 +493,16 @@ class AppController extends ChangeNotifier {
 
     final cleanedResponse = response.replaceAll(RegExp(r'[\r\n>]'), ' ').trim();
 
-    final isDtcCommand = apiCommand == '03' ||
+    // أوامر الأعطال ("03"/"DTCS?"/"DTC?") تُحلَّل عبر
+    // `POST /api/analyze/dtc` بمصفوفة الأكواد المستخرجة من الجهاز
+    // (انظر [analyzeDtcCodes]) — لا تُرسَل إلى خدمة تحليل الردود.
+    if (apiCommand == '03' ||
         apiCommand.startsWith('DTCS') ||
-        apiCommand == 'DTC?';
-    final apiResponse = isDtcCommand
-        ? cleanedResponse
-        : ObdParser.toRawObdResponse(apiCommand, cleanedResponse);
+        apiCommand == 'DTC?') {
+      return;
+    }
+
+    final apiResponse = ObdParser.toRawObdResponse(apiCommand, cleanedResponse);
     log('API SEND: command=$apiCommand response=$apiResponse');
 
     if (apiCommand.isEmpty ||
@@ -429,6 +551,7 @@ class AppController extends ChangeNotifier {
         response: response,
       );
       log('PID parsed value: ${reading.value} ${reading.unit}');
+      _lastPidReading = reading;
       _readings = {..._readings, pid: reading};
       notifyListeners();
       return reading;
@@ -488,20 +611,41 @@ class AppController extends ChangeNotifier {
       return null;
     }
   }
+  /// تقسيم رد الجهاز الخام إلى عناصر مصفوفة `codes` **دون أي فك محلي**.
+  ///
+  /// هذا هو مسار التوجيه المباشر: رد الجهاز (مثل "P0128, P0420, P0430"
+  /// أو "p0128 p0420 p0430") لا يمرّ على parseDtc ولا يُفكّ بايتياً —
+  /// يُقسّم فقط على الفواصل/المسافات/الأسطر ويُرسل عناصره للباك إند
+  /// كما وصلت (مع تطبيع بسيط: تشذيب وحروف كبيرة، والمزيد من التسوية
+  /// داخل DtcAnalysisService وفق قيود InputAnalyzeDtcSchema).
+  static List<String> splitDtcTokens(String response) {
+    return response
+        .split(RegExp(r'[,;\s]+'))
+        .map((token) => token.trim().toUpperCase())
+        .where((token) => token.isNotEmpty)
+        .toList();
+  }
 
-  /// قراءة أكواد الأعطال بأمر "03" القياسي ثم "DTCS؟" (فيرموير مرقّع).
+  /// قراءة أكواد الأعطال بأمر "03" القياسي ثم "DTCS?" (فيرموير مرقّع).
   /// يعيد الرد الخام عند النجاح (للعرض في ورقة النتيجة) أو null.
+  ///
+  /// الرد نفسه لا يُفكّ محلياً إطلاقاً: يُوجّه مباشرةً إلى الباك إند
+  /// عبر [analyzeDtcCodes] بعد تقسيمه إلى عناصر فقط — فلا اشتراط
+  /// لصيغة "43 ..." البايتية، ويكفي رد نصي مثل "P0128, P0420, P0430".
   Future<String?> readDtc() async {
     // أولاً: الأمر القياسي mode-03 "03\r" — هذا هو الكود الفعلي المطلوب
     // إرساله لقراءة أكواد الأعطال (طلبات OBD-II القياسية عبر أي جسر
-    // ELM327/OBD-II). الرد المتوقع "43 <عدد> <أزواج>".
-    // ثانياً: إن لم يرد الجسر برد يبدأ بـ "43 ..." (جاء "ERROR" أو لا
-    // رد) نجرّب أمر "DTCS?" الخاص بفيرموير telelogger المُرقّع
-    // (firmware_patch/telelogger_dtc.patch) والذي يرد رد mode-03
-    // من ذاكرة الأكواد المخزنة بنفس الصيغة، لأن "03" غير مدرج في
-    // قائمة أوامر processBLE حتى الفيرموير المرقّع.
+    // ELM327/OBD-II). الرد المتوقع نص الأكواد مباشرة أو رد mode-03.
+    // ثانياً: إن لم يصل رد صالح (خطأ أو انقطاع) نجرّب أمر "DTCS?" الخاص
+    // بفيرموير telelogger المُرقّع (firmware_patch/telelogger_dtc.patch)
+    // لأنه يرد من ذاكرة الأكواد المخزنة، ولأن "03" غير مدرج في قائمة
+    // أوامر processBLE حتى الفيرموير المرقّع.
     final stopwatch = Stopwatch()..start();
     log('DTC FLOW: ================= <start> =================');
+
+    // فحص جديد: لا نعرض نتائج تحليل فحص سابق أثناء الجلب.
+    _resetDtcAnalysis();
+    notifyListeners();
 
     // محاولة واحدة: إرسال، تسجيل ما قبل/ما بعد، وتصنيف مرحلة الفشل
     // عند غياب الرد: "لم يصل رد" (TimeoutException بعد نجاح الكتابة)
@@ -525,18 +669,26 @@ class AppController extends ChangeNotifier {
 
     var response = await attempt('03', ObdCommands.readDtc);
 
-    // الإعادة بأمر "DTCS?" تُنفَّذ في الحالتين اللتين رُصدتا:
-    // أ) لا رد إطلاقاً (فشل إرسال/استقبال).
-    // ب) الرد مؤشر خطأ ("ERROR"/"NO DATA") — الجسر لا يدعم وضع 03
-    //    القياسي عبر BLE.
+    // مبدأ التوجيه المباشر: رد الجهاز لا يُمرّر على parseDtc ولا يُفك
+    // محلياً إطلاقاً — يُقسّم حصراً على الفواصل/المسافات ليصبح مصفوفة
+    // النصوص التي يطلبها InputAnalyzeDtcSchema، ثم يُرسل للباك إند
+    // كما وصل. (parseDtc يبقى مخصصاً لعرض سجلات (تاريخ) فقط.)
+    var codes = response == null
+        ? const <String>[]
+        : splitDtcTokens(response);
+
+    // الإعادة بأمر "DTCS?" فقط حين لا يصل رد صالح: لا رد إطلاقاً،
+    // أو رد خطأ صريح ("ERROR"/"NO DATA"). ولا تُعاد المحاولة حين وصل
+    // نص الأكواد نفسه — فهو يُرسل مباشرة كما هو.
     if (response == null || ObdParser.isError(response)) {
       if (response != null) {
-        log('DTC FLOW: رد "03" = "${response.trim()}" لا يمثل أكواداً — '
-            'إعادة المحاولة بأمر "DTCS?" (فيرموير مرقّع).');
+        log('DTC FLOW: رد "03" = "${response.trim()}" خطأ — إعادة '
+            'المحاولة بأمر "DTCS?" (فيرموير مرقّع).');
       } else {
         log('لا رد على "03"؛ إعادة المحاولة بأمر "DTCS?" (فيرموير مرقّع).');
       }
       response = await attempt('DTCS?', ObdCommands.readDtcCached);
+      codes = response == null ? const <String>[] : splitDtcTokens(response);
     }
 
     if (response == null) {
@@ -552,6 +704,7 @@ class AppController extends ChangeNotifier {
           '— السبب يقينياً فيرموير غير مرقّع لا يدعم قراءة الأكواد عبر BLE.');
       _dtcCodes = <String>[];
       _hasReadDtc = false;
+      _resetDtcAnalysis();
       _error = 'قراءة أكواد الأعطال: ردّ الجهاز "$trimmed" على الأمرين '
           '"03" و"DTCS?" معاً. تم التحقق من الإرسال (FFE1) والاستقبال '
           '(FFE2) وسجلا طبيعيان — المشكلة في الفيرموير نفسه: الفيرموير '
@@ -562,31 +715,14 @@ class AppController extends ChangeNotifier {
       return null;
     }
 
-    // حارس التسلسل: رد أقراص الأعطال الصالح يجب أن يحتوي على علامة
-    // الوضع 03 الإيجابي "43". أي رد آخر (مثل "SEARCHING..." أو نص
-    // وسيط من الجسر) ليس رد أكواد أعطال — لا يُفكّ ولا يُعد نجاحاً
-    // "بلا أعطال": كانت العملية السابقة تعرض "لا توجد أكواد" كأنها
-    // نتيجة حقيقية للجهاز رغم أن رد الأكواد لم يصل أصلاً.
-    final hasDtcMarker = RegExp(r'\b43\b').hasMatch(response);
-    if (!hasDtcMarker) {
-      final trimmed = response.trim();
-      log('DTC FLOW: رد بلا علامة "43" — ليس رد أكواد أعطال صالحاً: "$trimmed"');
-      _dtcCodes = <String>[];
-      _hasReadDtc = false;
-      _error = 'قراءة أكواد الأعطال: وصل رد غير صالح ("$trimmed") لا يحتوي '
-          'على رد وضع 03 ("43 ..."). أعِد المحاولة، وإن تكرر فالفيرموير '
-          'لا يدعم قراءة الأكواد عبر BLE (انظر firmware_patch/).';
-      notifyListeners();
-      log('DTC FLOW: ================= <end: رد غير صالح> ==================');
-      return null;
-    }
-
-    // الفك يتم هنا محلياً في التطبيق من الرد الخام حصراً (العرض على
-    // المركبة مصدره الرد الحقيقي للجهاز) — ويُرسل في الخلفية (غير
-    // حاجب) رد الأعطال مع الأمر الأصلي إلى خدمة التحليل للتحليل
-    // الأعمق، كما في _runApiAnalysis.
-    final codes = ObdParser.parseDtc(response);
-    log('DTC FLOW: الفك محلياً للعرض (والرد الخام يُرسل في الخلفية للتحليل) — النتيجة: $codes');
+    // توجيه مباشر: نص الرد كما وصل من الجهاز (مثل "P0128, P0420,
+    // P0430" أو بأي صيغة أخرى) يُقسّم على الفواصل/المسافات فقط —
+    // بلا فك أو تحقق محلي (لا parseDtc) — وتُرسل العناصر كلها إلى
+    // `POST /api/analyze/dtc` لعرض تفاصيل كل عطل من استجابة الخدمة
+    // في شاشة الأعطال. (التسوية: uppercase/إزالة التكرار/الحد 100
+    // تجري داخل DtcAnalysisService حصراً وفق قيود المخطط.)
+    log('DTC FLOW: توجيه مباشر للرد الخام — العناصر: $codes؛ '
+        'إرسالها إلى /api/analyze/dtc دون فك محلي');
     log('DTC FLOW: ================= <end: نجاح> ==================');
 
     _dtcCodes = codes;
@@ -595,7 +731,40 @@ class AppController extends ChangeNotifier {
     // حتى لا تُعرض بجانب نتيجة حديثة صحيحة.
     _error = null;
     notifyListeners();
+
+    // لا نحظر عرض الأكواد المحلية بانتظار التحليل؛ الشاشة تعرض
+    // حالة "جارٍ التحليل" ثم تُحدَّث تلقائياً عند وصول الاستجابة.
+    unawaited(analyzeDtcCodes(codes));
     return response;
+  }
+
+  /// إرسال أكواد الأعطال المستخرجة من رد الجهاز إلى خدمة التحليل.
+  ///
+  /// [codes] هي عناصر الرد الخام بعد تقسيمها فقط (توجيه مباشر بلا فك
+  /// محلي؛ قد تكون فارغة، وحينها تعيد الخدمة حالة "السيارة سليمة").
+  Future<void> analyzeDtcCodes(List<String> codes) async {
+    _dtcAnalysisLoading = true;
+    _dtcAnalysisError = null;
+    notifyListeners();
+
+    try {
+      final result = await dtcAnalysisService.analyzeCodes(codes);
+      _dtcAnalysis = result;
+    } catch (error) {
+      _dtcAnalysis = null;
+      _dtcAnalysisError = error is DtcAnalysisException
+          ? error.message
+          : 'تعذر تحليل أكواد الأعطال: $error';
+    } finally {
+      _dtcAnalysisLoading = false;
+      notifyListeners();
+    }
+  }
+
+  void _resetDtcAnalysis() {
+    _dtcAnalysis = null;
+    _dtcAnalysisError = null;
+    _dtcAnalysisLoading = false;
   }
 
   // ============================================================
@@ -616,6 +785,10 @@ class AppController extends ChangeNotifier {
       return null;
     }
 
+    // القراءة القديمة لا تعبّر عن الأمر الجديد — تُمسح قبل البدء
+    // (تعاد بالضبط عند نجاح فك أمر 01xx عبر [readPid]).
+    _lastPidReading = null;
+
     // تعقيم المدخل: إزالة المحارف الشائبة ( "-", مسافات، "<" من لوحة
     // الاتجاه RTL، محارف مخفية من لصق النص) بحيث يعمل "-03" مثل "03".
     final normalized =
@@ -629,10 +802,12 @@ class AppController extends ChangeNotifier {
 
     // كل معاملات Mode-01 القياسية (0100، 010C، 010D، 0111 ...)
     // تُمرر عبر قارئ PID لتحليلها وعرض قيمتها في ورقة النتيجة.
+    // العنوان يأخذ معنى الأمر من الكتالوج (لا "فحص PID 0C" مثلاً).
     final pidMatch = RegExp(r'^01([0-9A-F]{2})$').firstMatch(normalized);
     if (pidMatch != null) {
       final pid = int.parse(pidMatch.group(1)!, radix: 16);
-      return (await readPid(pid, 'فحص PID ${pidMatch.group(1)}'))?.raw;
+      final (label, _) = ObdParser.pidMetadata(pid);
+      return (await readPid(pid, 'فحص $label'))?.raw;
     }
 
     // أوامر الأعطال: "03" القياسي أو "DTCS?"/"DTC?" (فيرموير مرقّع).
@@ -651,6 +826,13 @@ class AppController extends ChangeNotifier {
   // ============================================================
 
   void toggleLive(bool enabled) {
+    // المركبات غير المدعومة (≤ 2005) لا تُقرأ منها بيانات حية.
+    if (enabled && vehicleUnsupported) {
+      _error = 'المركبة غير مدعومة: $vehicleLabel — القراءة الحية '
+          'متاحة لمركبات سنة 2006 فأحدث فقط.';
+      notifyListeners();
+      return;
+    }
     _liveEnabled = enabled;
     notifyListeners();
     if (enabled) {
@@ -676,60 +858,106 @@ class AppController extends ChangeNotifier {
 
   Future<void> _liveTick() async {
     // حماية التسلسل: لا قراءة انشغالاً (_busy)، ولا دورة قيد التنفيذ،
-    // ولا تلقّي بدون اتصال (القسم يتوقف تلقائياً عند الانقطاع).
-    if (!_connected || _busy || _liveFetching) return;
+    // ولا تلقّي بدون اتصال (القسم يتوقف تلقائياً عند الانقطاع)،
+    // ولا قراءة من مركبة لا تدعم OBD-II.
+    if (!_connected || _busy || _liveFetching || vehicleUnsupported) return;
     _liveFetching = true;
     notifyListeners();
     try {
-      num? rpm;
-      num? speed;
-      double? battery;
-
       // لكل مؤشر: الرد المباشر من الفيرموير ("1616" أو "12.34") وكذلك
       // الصيغة القياسية "41 0C ..." يفكّه ObdParser.parsePid. فشل
       // قراءة مؤشر واحد لا يمنع البقية، ويُحفظ آخر قيمة ناجحة.
-      try {
-        final response = await bleService.sendCommand(
-          '010C\r',
-          timeout: const Duration(seconds: 3),
-        );
-        rpm = ObdParser.parsePid(pid: 0x0C, response: response).value;
-        log('LIVE: RPM = $rpm');
-      } catch (error) {
-        log('LIVE: تعذر قراءة RPM: $error');
-      }
-      try {
-        final response = await bleService.sendCommand(
-          '010D\r',
-          timeout: const Duration(seconds: 3),
-        );
-        speed = ObdParser.parsePid(pid: 0x0D, response: response).value;
-        log('LIVE: Speed = $speed');
-      } catch (error) {
-        log('LIVE: تعذر قراءة السرعة: $error');
-      }
-      try {
-        final response = await bleService.sendCommand(
-          'BATT\r',
-          timeout: const Duration(seconds: 3),
-        );
-        final volts = response.trim().replaceAll(RegExp(r'[^0-9.\-]'), '');
-        battery = double.tryParse(volts);
-        if (battery != null) log('LIVE: BATT = $battery');
-      } catch (error) {
-        log('LIVE: تعذر قراءة الجهد: $error');
-      }
+      final rpm = await _readLiveMetric<num>(
+        label: 'RPM',
+        command: '010C\r',
+        parse: (response) => ObdParser.parsePid(pid: 0x0C, response: response).value,
+      );
+      final speed = await _readLiveMetric<num>(
+        label: 'Speed',
+        command: '010D\r',
+        parse: (response) => ObdParser.parsePid(pid: 0x0D, response: response).value,
+      );
+      final coolant = await _readLiveMetric<num>(
+        label: 'حرارة التبريد',
+        command: ObdCommands.readCoolantTemperature,
+        parse: (response) => ObdParser.parsePid(pid: 0x05, response: response).value,
+      );
+      final double? battery = await _readLiveMetric<double>(
+        label: 'BATT',
+        command: ObdCommands.battery,
+        parse: (response) =>
+            double.tryParse(response.trim().replaceAll(RegExp(r'[^0-9.\-]'), '')),
+      );
 
       // لا نعرض إلا قيماً ردّ بها الجهاز فعلاً — لا بيانات مصطنعة.
-      if (rpm == null && speed == null && battery == null) return;
+      if (rpm == null && speed == null && coolant == null && battery == null) {
+        return;
+      }
       if (rpm != null) _liveRpm = rpm;
       if (speed != null) _liveSpeed = speed;
+      if (coolant != null) _liveCoolant = coolant;
       if (battery != null) _liveBattery = battery;
       _liveLastUpdate = DateTime.now();
       notifyListeners();
     } finally {
       _liveFetching = false;
       notifyListeners();
+    }
+  }
+
+  /// قراءة تعديل وقود قصير/طويل المدى وحساب مجموعهما.
+  /// تُستدعى عند ضغط الزر — كل ضغطة تُرسل الأمرين "0106" و"0107" من
+  /// جديد وتعيد الحساب من ردود الجهاز الفعلية.
+  /// الصيغة المعيارية لكل منهما: النسبة المئوية = A - 128،
+  /// والمجموع النهائي = STFT + LTFT.
+  Future<void> readFuelTrims() async {
+    // نفس حواجز التنفيذ: لا قراءة بلا اتصال أو أثناء انشغال، ولا قراءة
+    // متزامنة مكررة، ولا من مركبة لا تدعم OBD-II.
+    if (!_connected || _busy || _fuelTrimReading || vehicleUnsupported) return;
+    _fuelTrimReading = true;
+    notifyListeners();
+    try {
+      final stft = await _readLiveMetric<num>(
+        label: 'STFT',
+        command: ObdCommands.readStft,
+        parse: (response) => ObdParser.parsePid(pid: 0x06, response: response).value,
+      );
+      final ltft = await _readLiveMetric<num>(
+        label: 'LTFT',
+        command: ObdCommands.readLtft,
+        parse: (response) => ObdParser.parsePid(pid: 0x07, response: response).value,
+      );
+
+      // لا نعرض إلا قيماً ردّ بها الجهاز فعلاً — لا بيانات مصطنعة.
+      if (stft == null && ltft == null) return;
+      if (stft != null) _liveStft = stft;
+      if (ltft != null) _liveLtft = ltft;
+      _fuelTrimLastUpdate = DateTime.now();
+      log('FUEL TRIM: STFT = $stft% • LTFT = $ltft% • SUM = $fuelTrimSum%');
+      notifyListeners();
+    } finally {
+      _fuelTrimReading = false;
+      notifyListeners();
+    }
+  }
+
+  /// قراءة مؤشر حي واحد عبر BLE: يعيد القيمة المفكوكة أو null عند الفشل.
+  Future<T?> _readLiveMetric<T extends num>({
+    required String label,
+    required String command,
+    required T? Function(String response) parse,
+  }) async {
+    try {
+      final response = await bleService.sendCommand(
+        command,
+        timeout: const Duration(seconds: 3),
+      );
+      final value = parse(response);
+      if (value != null) log('LIVE: $label = $value');
+      return value;
+    } catch (error) {
+      log('LIVE: تعذر قراءة $label: $error');
+      return null;
     }
   }
 }

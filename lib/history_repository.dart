@@ -22,7 +22,8 @@ class HistoryRepository {
     final records = await load();
     records.insert(0, record);
     final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(_storageKey, encodeHistory(records.take(100).toList()));
+    await preferences.setString(
+        _storageKey, encodeHistory(records.take(100).toList()));
   }
 
   Future<void> clear() async {

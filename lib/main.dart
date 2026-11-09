@@ -65,8 +65,8 @@ class _ObdScannerAppState extends State<ObdScannerApp> {
   }
 }
 
-/// غلاف الهيكل الرئيسي — يُشغّل الخدمات (BLE/HTTP) مرة واحدة عند
-/// إقلاع الواجهة، بنفس تسلسل الإقلاع السابق (أذونات + بث + HTTP).
+/// غلاف الهيكل الرئيسي — يُشغّل الخدمات (BLE) مرة واحدة عند إقلاع
+/// الواجهة (أذونات الأجهزة أولاً).
 class _BootShell extends StatefulWidget {
   const _BootShell();
 

@@ -7,7 +7,13 @@ import 'package:flutter/foundation.dart';
 import 'obd_protocol.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-enum ObdConnectionStatus { disconnected, scanning, connecting, connected, error }
+enum ObdConnectionStatus {
+  disconnected,
+  scanning,
+  connecting,
+  connected,
+  error
+}
 
 class DiscoveredObdDevice {
   const DiscoveredObdDevice({required this.result});
@@ -25,7 +31,9 @@ class DiscoveredObdDevice {
     if (platformName.isNotEmpty) return platformName;
 
     final idFragment = result.device.remoteId.toString();
-    return idFragment.isNotEmpty ? 'جهاز BLE قريب ($idFragment)' : 'جهاز BLE بدون اسم';
+    return idFragment.isNotEmpty
+        ? 'جهاز BLE قريب ($idFragment)'
+        : 'جهاز BLE بدون اسم';
   }
 
   String get id => result.device.remoteId.toString();
@@ -57,7 +65,8 @@ class BleObdService {
   BluetoothCharacteristic? _responseCharacteristic;
 
   /// خاصية استقبال الردود FFE2 للجهاز المتصل حالياً (لأغراض التشخيص).
-  BluetoothCharacteristic? get responseCharacteristic => _responseCharacteristic;
+  BluetoothCharacteristic? get responseCharacteristic =>
+      _responseCharacteristic;
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<List<int>>? _responseSubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
@@ -85,7 +94,10 @@ class BleObdService {
   };
 
   static const Set<String> _firmwareSupportedPrefixes = {
-    '01', 'APN=', 'SSID=', 'WPWD=',
+    '01',
+    'APN=',
+    'SSID=',
+    'WPWD=',
   };
 
   /// هل الأمر مدعوم في فيرموير v5؟ (للتشخيص وتحذير المستخدم)
@@ -222,7 +234,7 @@ class BleObdService {
   }
 
   final StreamController<String> _debugLogController =
-  StreamController<String>.broadcast();
+      StreamController<String>.broadcast();
 
   Stream<String> get debugLogs => _debugLogController.stream;
 
@@ -241,10 +253,8 @@ class BleObdService {
     }
   }
 
-
   Future<void> connect(BluetoothDevice device) async {
     try {
-
       _log('========== بدء الاتصال بجهاز BLE ==========');
 
       await stopScan();
@@ -261,11 +271,9 @@ class BleObdService {
         autoConnect: false,
       );
 
-
       _device = device;
 
       _log('نجح اتصال Bluetooth');
-
 
       await _connectionSubscription?.cancel();
       _connectionSubscription = device.connectionState.listen((state) {
@@ -327,10 +335,10 @@ class BleObdService {
 
           _log(
             'CHAR UUID: ${characteristic.uuid} | '
-                'WRITE: ${p.write} | '
-                'WRITE WITHOUT RESPONSE: ${p.writeWithoutResponse} | '
-                'NOTIFY: ${p.notify} | '
-                'INDICATE: ${p.indicate}',
+            'WRITE: ${p.write} | '
+            'WRITE WITHOUT RESPONSE: ${p.writeWithoutResponse} | '
+            'NOTIFY: ${p.notify} | '
+            'INDICATE: ${p.indicate}',
           );
         }
 
@@ -429,11 +437,11 @@ class BleObdService {
     }
   }
 
-
   Future<void> disconnect() async {
     _quietTimer?.cancel();
     if (_responseCompleter != null && !_responseCompleter!.isCompleted) {
-      _responseCompleter!.completeError(const ObdProtocolException('تم فصل الجهاز.'));
+      _responseCompleter!
+          .completeError(const ObdProtocolException('تم فصل الجهاز.'));
     }
     _responseCompleter = null;
     await _responseSubscription?.cancel();
@@ -453,15 +461,16 @@ class BleObdService {
     }
     _setStatus(ObdConnectionStatus.disconnected);
   }
+
   Future<String> sendCommand(
-      String command, {
-        Duration timeout = const Duration(seconds: 30),
-      }) async {
+    String command, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
     final characteristic = _commandCharacteristic;
 
-      _log('BLE TX command: $command');
-      _log('BLE TX bytes: ${command.codeUnits}');
-      _log('إرسال أمر OBD: $command');
+    _log('BLE TX command: $command');
+    _log('BLE TX bytes: ${command.codeUnits}');
+    _log('إرسال أمر OBD: $command');
     if (characteristic == null ||
         _currentStatus != ObdConnectionStatus.connected) {
       throw const ObdProtocolException(
@@ -534,25 +543,24 @@ class BleObdService {
     });
 
     try {
-
       final properties = characteristic.properties;
 
-final bool withoutResponse;
+      final bool withoutResponse;
 
-if (properties.write) {
-  withoutResponse = false;
-} else if (properties.writeWithoutResponse) {
-  withoutResponse = true;
-} else {
-  throw const ObdProtocolException(
-    'خاصية FFE1 لا تدعم الكتابة المطلوبة.',
-  );
-}
+      if (properties.write) {
+        withoutResponse = false;
+      } else if (properties.writeWithoutResponse) {
+        withoutResponse = true;
+      } else {
+        throw const ObdProtocolException(
+          'خاصية FFE1 لا تدعم الكتابة المطلوبة.',
+        );
+      }
 
-await characteristic.write(
-  bytes,
-  withoutResponse: withoutResponse,
-);
+      await characteristic.write(
+        bytes,
+        withoutResponse: withoutResponse,
+      );
 
       _log('تم إرسال الأمر إلى FFE1 بنجاح');
 
@@ -594,13 +602,11 @@ await characteristic.write(
     final completer = _responseCompleter;
     if (completer == null || completer.isCompleted) return;
 
-
     final currentResponse = _responseBuffer.toString();
     final payload = currentResponse.replaceAll(
       RegExp(r'[\r\n\s>]'),
       '',
     );
-
 
     if (payload.isEmpty) {
       _log('BLE RX: وصل فاصل سطر فقط؛ انتظار بيانات إضافية.');
@@ -630,8 +636,8 @@ await characteristic.write(
     // الكاملة مثل إطارات DTC.
     final isInterimStatus =
         currentResponse.toUpperCase().contains('SEARCHING') ||
-        currentResponse.toUpperCase().contains('BUS INIT') ||
-        currentResponse.toUpperCase().contains('BUSINIT');
+            currentResponse.toUpperCase().contains('BUS INIT') ||
+            currentResponse.toUpperCase().contains('BUSINIT');
 
     _quietTimer?.cancel();
     final isEolTerminated = chunk.contains('\r') &&
@@ -643,12 +649,14 @@ await characteristic.write(
       () {
         if (!completer.isCompleted) {
           final response = _responseBuffer.toString();
-          _log('BLE RX complete (${isEolTerminated ? 'EOL' : 'quiet'}): ${jsonEncode(response)}');
+          _log(
+              'BLE RX complete (${isEolTerminated ? 'EOL' : 'quiet'}): ${jsonEncode(response)}');
           completer.complete(response);
         }
       },
     );
   }
+
   Future<void> dispose() async {
     await disconnect();
     await stopScan();
@@ -658,4 +666,3 @@ await characteristic.write(
     await _debugLogController.close();
   }
 }
-

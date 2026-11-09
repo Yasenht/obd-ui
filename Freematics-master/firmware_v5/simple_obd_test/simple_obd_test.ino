@@ -41,7 +41,7 @@ void loop() {
   if (!connected) {
     digitalWrite(PIN_LED, HIGH);
     Serial.print("Connecting to OBD...");
-    if (obd.init()) {
+    if (obd.init(PROTO_VAG_KW1281, true)) {
       Serial.println("OK");
       connected = true;
     } else {
