@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import '../controllers/app_controller.dart';
 import '../controllers/app_scope.dart';
 import '../models/dtc_analysis.dart';
-import '../services/dtc_repository.dart';
+import '../services/dtc_analysis_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/common.dart';
 import 'faults_screen.dart';
@@ -15,8 +15,9 @@ import 'faults_screen.dart';
 ///
 /// - الكود المُكتشف في آخر فحص: تُعرض حقول استجابة
 ///   `POST /api/analyze/dtc` كما وردت حرفياً (بلا حقول مضافة).
-/// - الكود المُدخل يدوياً: يُحاول جلب المعلومات من [DtcInfoRepository]
-///   (غير مهيأة بعد) مع معلومات النظام المعيارية المحلية فقط.
+/// - الكود المُدخل يدوياً (مثل P4300): يُرسل وحده إلى الخدمة نفسها
+///   (Gemini) وتُعرض محللاتها: الوصف/الأسباب/الأعراض/خطوات التشخيص/
+///   الحلول/الخطورة.
 class FaultDetailsScreen extends StatefulWidget {
   const FaultDetailsScreen({super.key, required this.code});
 
@@ -26,12 +27,11 @@ class FaultDetailsScreen extends StatefulWidget {
   State<FaultDetailsScreen> createState() => _FaultDetailsScreenState();
 }
 
-enum _DetailsState { idle, loading, notConfigured, loaded, notFound, error }
+enum _DetailsState { loading, loaded, notFound, error }
 
 class _FaultDetailsScreenState extends State<FaultDetailsScreen> {
-  DtcInfoRepository? _repository;
-  _DetailsState _state = _DetailsState.idle;
-  DtcInfo? _info;
+  _DetailsState _state = _DetailsState.loading;
+  DtcFault? _fault;
   String? _errorText;
   bool _manualLoadStarted = false;
 
@@ -39,32 +39,37 @@ class _FaultDetailsScreenState extends State<FaultDetailsScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     // الأكواد المُكتشفة تُعرض من استجابة خدمة التحليل مباشرة،
-    // لذا لا نستعلم خدمة المعلومات اليدوية عنها إطلاقاً.
+    // لذا لا نرسل استعلاماً جديداً عنها.
     if (_manualLoadStarted || _detectedInScan) return;
     _manualLoadStarted = true;
-    _repository = HttpDtcInfoRepository();
     unawaited(_load());
   }
 
   bool get _detectedInScan => context.controller.dtcCodes
       .any((c) => c.toUpperCase() == widget.code.toUpperCase());
 
+  /// إرسال الكود المُدخل يدوياً إلى `POST /api/analyze/dtc` واستخراج
+  /// تحليل هذا الكود وحده من استجابة الخدمة.
   Future<void> _load() async {
+    final service = context.controller.dtcAnalysisService;
     setState(() => _state = _DetailsState.loading);
     try {
-      final info = await _repository!.fetchInfo(widget.code.toUpperCase());
+      final result =
+          await service.analyzeCodes([widget.code.toUpperCase()]);
       if (!mounted) return;
-      if (info == null || info.isEmpty) {
-        setState(() => _state = _DetailsState.notFound);
-      } else {
-        setState(() {
-          _info = info;
-          _state = _DetailsState.loaded;
-        });
-      }
-    } on DtcRepositoryNotConfigured {
+      final fault = result.faultForCode(widget.code);
+      setState(() {
+        _fault = fault;
+        _state = fault == null
+            ? _DetailsState.notFound
+            : _DetailsState.loaded;
+      });
+    } on DtcAnalysisException catch (error) {
       if (!mounted) return;
-      setState(() => _state = _DetailsState.notConfigured);
+      setState(() {
+        _errorText = error.message;
+        _state = _DetailsState.error;
+      });
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -91,7 +96,7 @@ class _FaultDetailsScreenState extends State<FaultDetailsScreen> {
             style: const TextStyle(fontFamily: 'monospace', letterSpacing: 1)),
         actions: [
           IconButton(
-            tooltip: detected ? 'إعادة تحليل الأكواد' : 'إعادة تحميل المعلومات',
+            tooltip: detected ? 'إعادة تحليل الأكواد' : 'إعادة تحليل الكود',
             onPressed: detected
                 ? (app.dtcAnalysisLoading ? null : () => _retryAnalysis(app))
                 : _load,
@@ -200,14 +205,21 @@ class _FaultDetailsScreenState extends State<FaultDetailsScreen> {
     return [_DtcFaultCards(fault: fault)];
   }
 
-  /// محتوى الكود اليدوي: مسار [DtcInfoRepository] كما كان.
+  /// محتوى الكود اليدوي: نفس بطاقات تحليل الخدمة (Gemini).
   List<Widget> _buildManualContent(BuildContext context) {
     return [
       switch (_state) {
-        _DetailsState.idle => const _LoadingCard(),
-        _DetailsState.loading => const _LoadingCard(),
-        _DetailsState.notConfigured => _NotConfiguredCard(onRetry: _load),
-        _DetailsState.loaded => _LoadedCards(info: _info!),
+        _DetailsState.loading => const _LoadingCard(
+            message: 'جارٍ تحليل الكود عبر الخدمة (قد يستغرق لحظات)...',
+          ),
+        _DetailsState.loaded => _fault?.failed ?? true
+            ? _MissingAnalysisCard(
+                message: _fault!.error?.isNotEmpty == true
+                    ? _fault!.error!
+                    : 'تعذر تحليل رمز العطل',
+                title: 'تعذر تحليل هذا الكود',
+              )
+            : _DtcFaultCards(fault: _fault!),
         _DetailsState.notFound => _NotFoundCard(code: widget.code),
         _DetailsState.error => _ErrorCard(
             message: _errorText ?? 'خطأ غير معروف',
@@ -327,40 +339,38 @@ class _HeaderCard extends StatelessWidget {
               spacing: 8,
               runSpacing: 6,
               children: [
-                if (detectedInScan) ...[
-                  if (data?.severity?.isNotEmpty == true)
-                    Chip(
-                      label: Text('الخطورة: ${data!.severity}'),
-                      labelStyle:
-                          TextStyle(fontSize: 11.5, color: palette.text),
-                    ),
-                  if (data?.status?.isNotEmpty == true)
-                    Chip(
-                      label: Text('الحالة: ${data!.status}'),
-                      labelStyle:
-                          TextStyle(fontSize: 11.5, color: palette.text),
-                    ),
-                  if (data?.confidence != null)
-                    Chip(
-                      label: Text(
-                        'الثقة: ${(data!.confidence! * 100).toStringAsFixed(0)}%',
-                      ),
-                      labelStyle:
-                          TextStyle(fontSize: 11.5, color: palette.text),
-                    ),
-                ] else ...[
-                  Chip(
-                    avatar: Icon(
-                      system.icon,
-                      size: 15,
-                      color: palette.onPrimary,
-                    ),
-                    label: Text('النظام: ${system.displayName}'),
-                    labelStyle: TextStyle(fontSize: 11.5, color: palette.text),
+                // شريحة النظام المعياري (من حرف الكود) تظهر دائماً.
+                Chip(
+                  avatar: Icon(
+                    system.icon,
+                    size: 15,
+                    color: palette.onPrimary,
                   ),
-                  const Chip(label: Text('الخطورة: غير متوفرة')),
-                  const Chip(label: Text('الحالة: غير متوفرة')),
-                ],
+                  label: Text('النظام: ${system.displayName}'),
+                  labelStyle: TextStyle(fontSize: 11.5, color: palette.text),
+                ),
+                // حقول الخطورة/الحالة/الثقة من بيانات الخدمة إن وُجدت
+                // (كود مكتشف أو مُدخل يدوياً على حد سواء).
+                if (data?.severity?.isNotEmpty == true)
+                  Chip(
+                    label: Text('الخطورة: ${data!.severity}'),
+                    labelStyle:
+                        TextStyle(fontSize: 11.5, color: palette.text),
+                  ),
+                if (data?.status?.isNotEmpty == true)
+                  Chip(
+                    label: Text('الحالة: ${data!.status}'),
+                    labelStyle:
+                        TextStyle(fontSize: 11.5, color: palette.text),
+                  ),
+                if (data?.confidence != null)
+                  Chip(
+                    label: Text(
+                      'الثقة: ${(data!.confidence! * 100).toStringAsFixed(0)}%',
+                    ),
+                    labelStyle:
+                        TextStyle(fontSize: 11.5, color: palette.text),
+                  ),
               ],
             ),
           ],
@@ -641,52 +651,6 @@ class _MissingAnalysisCard extends StatelessWidget {
   }
 }
 
-/// الحالة الأساسية للكود اليدوي: الخدمة لم تربَط بعد — نص وصفي واضح.
-class _NotConfiguredCard extends StatelessWidget {
-  const _NotConfiguredCard({required this.onRetry});
-
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = Palette.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            EmptyState(
-              compact: true,
-              icon: Icons.cloud_off_rounded,
-              title: 'بيانات العطل التفصيلية غير متوفرة بعد',
-              message: 'الشرح والأسباب والأعراض تتطلب ربط خدمة معلومات '
-                  'الأعطال (REST API). لم تُحدد تفاصيل الخدمة بعد، لذا لا '
-                  'تُعرض أي بيانات مفترضة هنا.',
-            ),
-            OutlinedButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.sync_rounded, size: 18),
-              label: const Text('إعادة المحاولة'),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'ما هو متاح الآن معرفياً: أول حرف من الكود (P المحرك/ناقل '
-              'الحركة، C الشاسي، B الهيكل، U الشبكة) يحدد النظام '
-              'المتأثر — وهو استنباط معياري دقيق لا يحتاج الإنترنت.',
-              style: TextStyle(
-                fontSize: 11,
-                color: palette.textMuted,
-                height: 1.55,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _NotFoundCard extends StatelessWidget {
   const _NotFoundCard({required this.code});
 
@@ -744,115 +708,3 @@ class _ErrorCard extends StatelessWidget {
   }
 }
 
-/// بطاقات التفاصيل الكاملة عند توفر بيانات [DtcInfoRepository] فعلاً
-/// (مسار الإدخال اليدوي فقط).
-class _LoadedCards extends StatelessWidget {
-  const _LoadedCards({required this.info});
-
-  final DtcInfo info;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = Palette.of(context);
-    final sections = <(String, IconData, List<String>)>[
-      (
-        'الشرح',
-        Icons.menu_book_rounded,
-        info.description == null ? [] : [info.description!]
-      ),
-      ('الأسباب المحتملة', Icons.help_outline_rounded, info.causes),
-      ('الأعراض الشائعة', Icons.sick_rounded, info.symptoms),
-      ('خطوات التشخيص الأولية', Icons.checklist_rounded, info.initialSteps),
-      (
-        'الإجراءات الموصى بها',
-        Icons.build_circle_outlined,
-        info.recommendedActions
-      ),
-    ];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (info.name?.isNotEmpty ?? false) ...[
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Text(
-                info.name!,
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                  color: palette.text,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-        ],
-        ...sections.where((s) => s.$3.isNotEmpty).map((s) {
-          final (title, icon, items) = s;
-          return Card(
-            margin: const EdgeInsets.only(bottom: 10),
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(icon, size: 16, color: palette.onPrimary),
-                      const SizedBox(width: 8),
-                      Text(
-                        title,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                          color: palette.text,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  ...items.map(
-                    (item) => Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.only(top: 5),
-                            child: Icon(Icons.remove,
-                                size: 10, color: palette.textMuted),
-                          ),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              item,
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                color: palette.text,
-                                height: 1.55,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }),
-        if (info.source?.isNotEmpty ?? false)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              'مصدر المعلومات: ${info.source}',
-              style: TextStyle(fontSize: 10.5, color: palette.textMuted),
-            ),
-          ),
-      ],
-    );
-  }
-}

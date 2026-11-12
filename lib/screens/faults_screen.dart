@@ -89,24 +89,30 @@ class FaultsScreen extends StatelessWidget {
     }
 
     if (!controller.hasReadDtc) {
-      return Padding(
+      return ListView(
         padding: const EdgeInsets.all(24),
-        child: Center(
-          child: EmptyState(
-            icon: Icons.pending_actions_rounded,
-            title: 'لم يُجرَ فحص بعد',
-            message: 'لا يمكن عرض الأعطال قبل تنفيذ فحص فعلي عبر '
-                'الاتصال بجهاز التشخيص OBD-II.',
-            action: SizedBox(
-              height: 46,
-              child: ElevatedButton.icon(
-                onPressed: controller.busy ? null : () => controller.readDtc(),
-                icon: const Icon(Icons.bolt_rounded, size: 20),
-                label: const Text('فحص أكواد الأعطال الآن'),
+        children: [
+          Center(
+            child: EmptyState(
+              icon: Icons.pending_actions_rounded,
+              title: 'لم يُجرَ فحص بعد',
+              message: 'لا يمكن عرض الأعطال قبل تنفيذ فحص فعلي عبر '
+                  'الاتصال بجهاز التشخيص OBD-II.',
+              action: SizedBox(
+                height: 46,
+                child: ElevatedButton.icon(
+                  onPressed: controller.busy ? null : () => controller.readDtc(),
+                  icon: const Icon(Icons.bolt_rounded, size: 20),
+                  label: const Text('فحص أكواد الأعطال الآن'),
+                ),
               ),
             ),
           ),
-        ),
+          const SizedBox(height: 16),
+          const _FreezeFrameSection(),
+          const SizedBox(height: 12),
+          const _ClearFaultsSection(),
+        ],
       );
     }
 
@@ -151,6 +157,10 @@ class FaultsScreen extends StatelessWidget {
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 11, color: palette.textMuted),
           ),
+          const SizedBox(height: 16),
+          const _FreezeFrameSection(),
+          const SizedBox(height: 12),
+          const _ClearFaultsSection(),
         ],
       );
     }
@@ -192,6 +202,10 @@ class FaultsScreen extends StatelessWidget {
               },
             );
           }),
+          const SizedBox(height: 16),
+          const _FreezeFrameSection(),
+          const SizedBox(height: 12),
+          const _ClearFaultsSection(),
         ],
       ),
     );
@@ -535,6 +549,254 @@ class _FieldLine extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ============================================================
+// قسم قراءة أكواد إطار التجميد (أمر 02) — وضع Freeze Frame:
+// الأكواد التي كانت سارية لحظة تخزين الإطار المجمد. أمر قراءة
+// آمن بلا تأكيد (لا يحذف شيئاً)، بنقرة واحدة بلا إدخال يدوي.
+// ============================================================
+
+class _FreezeFrameSection extends StatelessWidget {
+  const _FreezeFrameSection();
+
+  Future<void> _read(BuildContext context) async {
+    final controller = context.controller;
+    final raw = await controller.readDtcFreezeFrame();
+    if (!context.mounted) return;
+    if (raw != null) {
+      await showResultSheet(
+        context,
+        title: 'قراءة أكواد إطار التجميد',
+        success: true,
+        summary: 'نُفّذ الأمر 02 ووصل الرد. الأكواد المفكوكة تُعرض '
+            'في قائمة الأعطال أعلاه، ويُطلب تحليلها من خدمة التحليل.',
+        raw: raw,
+      );
+    } else {
+      await showResultSheet(
+        context,
+        title: 'قراءة أكواد إطار التجميد',
+        success: false,
+        summary:
+            controller.error ?? 'فشل إرسال الأمر 02 — راجع رسالة الخطأ.',
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = Palette.of(context);
+    final controller = context.controller;
+    final enabled = controller.connected &&
+        !controller.busy &&
+        !controller.vehicleUnsupported;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: AppColors.olive.withOpacity(0.09),
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: const Icon(Icons.camera_roll_rounded,
+                      color: AppColors.olive, size: 21),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'أكواد إطار التجميد (أمر 02)',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13.5,
+                          color: palette.text,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'يقرأ أكواد الأعطال المرتبطة بإطار التجميد '
+                        'المخزّن لحظة تسجيل العطل (وضع 02) — أمر قراءة '
+                        'آمن لا يحذف أو يغيّر شيئاً.',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: palette.textMuted,
+                          height: 1.45,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 44,
+              child: ElevatedButton.icon(
+                onPressed: enabled ? () => _read(context) : null,
+                icon: const Icon(Icons.photo_camera_rounded, size: 20),
+                label: Text(controller.connected
+                    ? 'قراءة أكواد إطار التجميد'
+                    : 'اتصل بالجهاز أولاً'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// قسم مسح أكواد الأعطال المخزنة (أمر 04) — إرسال بنقرة واحدة
+// بعد تأكيد صريح من المستخدم، بلا إدخال يدوي.
+// ============================================================
+
+class _ClearFaultsSection extends StatelessWidget {
+  const _ClearFaultsSection();
+
+  /// نافذة تأكيد إجبارية قبل الإرسال: المسح يزيل الأكواد وإطار
+  /// التجميد من ذاكرة وحدة التحكم نهائياً ولا يمكن التراجع عنه.
+  Future<bool> _confirmClear(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('تأكيد مسح الأعطال'),
+        content: const Text(
+          'سيُرسَل الأمر 04 إلى وحدة التحكم وستُحذف كل أكواد الأعطال '
+          'المخزنة مع بيانات إطار التجميد نهائياً.\n\n'
+          'هل أنت متأكد من رغبتك في حذف هذه الأعطال؟ لا يمكن التراجع.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(
+              'نعم، امسح الأكواد',
+              style: TextStyle(color: AppColors.error),
+            ),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
+  Future<void> _clear(BuildContext context) async {
+    final controller = context.controller;
+    if (!await _confirmClear(context)) return;
+
+    final raw = await controller.clearFaultCodes();
+    if (!context.mounted) return;
+    if (raw != null) {
+      await showResultSheet(
+        context,
+        title: 'مسح أكواد الأعطال',
+        success: true,
+        summary: 'نُفّذ الأمر 04 — ذاكرة الأكواد في وحدة التحكم مُمسحة. '
+            'نفّذ «فحص أكواد الأعطال» للاطمئنان على النتيجة.',
+        raw: raw,
+      );
+    } else {
+      await showResultSheet(
+        context,
+        title: 'مسح أكواد الأعطال',
+        success: false,
+        summary:
+            controller.error ?? 'فشل إرسال الأمر 04 — راجع رسالة الخطأ.',
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = Palette.of(context);
+    final controller = context.controller;
+    final enabled = controller.connected &&
+        !controller.busy &&
+        !controller.vehicleUnsupported;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: AppColors.error.withOpacity(0.09),
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: const Icon(Icons.delete_forever_rounded,
+                      color: AppColors.error, size: 21),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'مسح أكواد الأعطال (أمر 04)',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13.5,
+                          color: palette.text,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'يُرسل الأمر 04 إلى وحدة التحكم لمسح كل الأكواد '
+                        'المخزنة وإطار التجميد — يُنفَّذ بعد تأكيدك فقط '
+                        'ولا يمكن التراجع عنه.',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: palette.textMuted,
+                          height: 1.45,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 44,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.error,
+                ),
+                onPressed: enabled ? () => _clear(context) : null,
+                icon: const Icon(Icons.delete_sweep_rounded, size: 20),
+                label: Text(controller.connected
+                    ? 'مسح الأكواد المخزنة'
+                    : 'اتصل بالجهاز أولاً'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

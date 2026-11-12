@@ -25,11 +25,14 @@ void main() {
       expect(BleObdService.isCommandSupported('DTC?'), isTrue);
       expect(BleObdService.isCommandSupported('DTCS>'), isTrue);
       expect(BleObdService.isCommandSupported('DTCCLR'), isTrue);
+      // أوامر وضع 03 (القياسية) ووضع 02 (إطار التجميد) بعد تحديث
+      // الفيرموير v5 — الفرع الموحّد "03"/"02"/"DTCS?" في processBLE().
+      expect(BleObdService.isCommandSupported('03'), isTrue);
+      expect(BleObdService.isCommandSupported('02'), isTrue);
     });
 
     test('أوامر غير مدعومة في قاعدة الفيرموير v5', () {
-      // تجيبها الفيرموير بـ "ERROR" قبل الترقية بـ firmware_patch/
-      expect(BleObdService.isCommandSupported('03'), isFalse);
+      // تجيبها الفيرموير بـ "ERROR" (بعد الترقية أيضاً)
       expect(BleObdService.isCommandSupported('0902'), isFalse);
       expect(BleObdService.isCommandSupported('ATZ'), isFalse);
       expect(BleObdService.isCommandSupported('ATH0'), isFalse);

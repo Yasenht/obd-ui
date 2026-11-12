@@ -15,24 +15,43 @@ void main() {
     expect(reading.unit, '°C');
   });
 
-  test('يفك تعديل وقود قصير/طويل المدى بالنسبة المئوية', () {
-    // الصيغة المعيارية: النسبة = A - 128 ("41 06 83" → +3%).
-    final stft = ObdParser.parsePid(pid: 0x06, response: '41 06 83\r');
+  test('يفك تعديل وقود قصير/طويل المدى بالنسبة المئوية (SAE)', () {
+    // صيغة SAE J1979: النسبة = (A - 128) × 100 / 128.
+    // "41 06 40" → (64-128)*100/128 = -50%.
+    final stft = ObdParser.parsePid(pid: 0x06, response: '41 06 40\r');
     expect(stft.label, 'تعديل وقود قصير المدى (STFT)');
-    expect(stft.value, 3);
+    expect(stft.value, -50);
     expect(stft.unit, '%');
 
-    // "41 07 76" → 118 - 128 = -10% (قيمة سالبة).
-    final ltft = ObdParser.parsePid(pid: 0x07, response: '41 07 76\r');
+    // "41 07 C0" → (192-128)*100/128 = +50%.
+    final ltft = ObdParser.parsePid(pid: 0x07, response: '41 07 C0\r');
     expect(ltft.label, 'تعديل وقود طويل المدى (LTFT)');
-    expect(ltft.value, -10);
+    expect(ltft.value, 50);
     expect(ltft.unit, '%');
-    expect(ltft.displayValue, '-10 %');
+
+    // قيمة غير صحيحة: "41 06 83" → 3*100/128 = 2.34375.
+    final stft2 = ObdParser.parsePid(pid: 0x06, response: '41 06 83\r');
+    expect(stft2.value, closeTo(2.34375, 0.00001));
+  });
+
+  test('يفك رد الفيرموير المباشر السالب للتعديل كنسبة كما هو', () {
+    // الفيرموير يرد برقم محوّل جاهز (Freematics readPID) وقد يكون
+    // سالباً — يجب قبوله كقيمة مباشرة لا كسلسلة hex.
+    final stft = ObdParser.parsePid(pid: 0x06, response: '-33\r');
+    expect(stft.value, -33);
+    expect(stft.unit, '%');
+    expect(stft.displayValue, '-33 %');
+
+    final ltft = ObdParser.parsePid(pid: 0x07, response: '7\r');
+    expect(ltft.value, 7);
+    expect(ltft.displayValue, '7 %');
   });
 
   test('يرمّز تعديل الوقود المئوي إلى صيغة 41 خام', () {
-    expect(ObdParser.toRawObdResponse('0106', '3'), '41 06 83');
-    expect(ObdParser.toRawObdResponse('0107', '-10'), '41 07 76');
+    // العكس: A = (النسبة × 128 / 100) + 128.
+    expect(ObdParser.toRawObdResponse('0106', '-50'), '41 06 40');
+    expect(ObdParser.toRawObdResponse('0107', '50'), '41 07 C0');
+    expect(ObdParser.toRawObdResponse('0107', '-10'), '41 07 73');
   });
 
   test('يفك 0100 كخريطة أوامر مدعومة لا كسقيمة خام', () {
@@ -205,6 +224,26 @@ void main() {
     // المحلل القديم كان يقترن بعد الـ43 مباشرة فيظهر P0102 إلخ.
     final codes = ObdParser.parseDtc('43 01 02 09 00 00 00 00\r');
     expect(codes, ['P0209']);
+  });
+
+  test('يفك رد وضع 02 (إطار التجميد) بصيغة الفيرموير بايت وضع 42', () {
+    // الفيرموير v5 بعد التحديث يجيب على "02" بنفس صيغة وضع 03 لكن
+    // بايت الوضع "42" بدل "43" (الرد يكرر رقم الوضع + 0x40):
+    // "42 [عدد=02] 01 08 01 09" → P0108، P0109.
+    final codes = ObdParser.parseDtc('42 02 01 08 01 09\r');
+    expect(codes, ['P0108', 'P0109']);
+  });
+
+  test('يفك رد وضع 02 (إطار التجميد) بصيغة CAN القياسية مع عدّاد', () {
+    // إطار CAN أحادي لوضع 02: 42 [عدد=01] [كود 02 09] [بطانة أصفار]
+    // → P0209 — نفس منطق وضع 03 مع بايت وضع مختلف.
+    final codes = ObdParser.parseDtc('42 01 02 09 00 00 00 00\r');
+    expect(codes, ['P0209']);
+  });
+
+  test('يرد وضع 02 بدون أكواد عند رد 42 00 00', () {
+    final codes = ObdParser.parseDtc('42 00 00\r');
+    expect(codes, isEmpty);
   });
 
   test('يفك إطارين CAN المرقّمين (عدة أكواد) مع العدّاد دون إزاحة', () {

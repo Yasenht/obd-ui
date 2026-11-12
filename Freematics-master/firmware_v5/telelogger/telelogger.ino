@@ -1354,26 +1354,33 @@ void processBLE(int timeout)
     n += snprintf(buf + n, bufsize - n, "%d", (int)(gd->speed * 1852 / 1000));
   } else if (!strcmp(cmd, "CRS") && gd) {
     n += snprintf(buf + n, bufsize - n, "%u", (unsigned int)gd->heading);
-  } else if (!strcmp(cmd, "03") || !strcmp(cmd, "DTCS?")) {
+  } else if (!strcmp(cmd, "03") || !strcmp(cmd, "DTCS?") || !strcmp(cmd, "02")) {
     // [إرسال DTC عبر BLE] إرسال رد وضع 03 القياسي من ذاكرة الأكواد
     // المخزنة (obd.readDTC): "43" + بايت عدد الأكواد + زوج بايتات
     // لكل كود، مثال كودين: "43 02 01 08 01 09" -> P0108، P0109.
     // الصيغة القياسية (عدد + أزواج) تُرسل كما هي للـ Backend للتحليل،
     // وتُفك محلياً في ObdParser.parseDtc في التطبيق.
+    // الأمر "02" (وضع إطار التجميد Freeze Frame) يُجاب من نفس ذاكرة
+    // الأكواد (dtc[]) لكن بايت الوضع في الرد يكون "42" بدل "43" حسب
+    // المعيار القياسي (الرد يكرّر رقم الوضع المطلوب + 0x40). مثال
+    // كودين: "42 02 01 08 01 09" -> P0108، P0109.
     // الأمر "03" (المُرسل من التطبيق أساساً) بمعناه الحي: يُسجّل
     // طلب قراءة حية يُنفذ في process() خارج معاملة OBD جارية،
-    // فيصبح الرد التالي على "03"/"DTCS?" محدثاً من ECU.
+    // فيصبح الرد التالي على "03"/"DTCS?" محدثاً من ECU. الأمر "02"
+    // يُسجّل الطلب نفسه كي يُحدَّث الرد التالي من ECU قبل الإرسال.
     byte count = 0;
     while (count < sizeof(dtc) / sizeof(dtc[0]) && dtc[count]) count++;
     int used = n;
-    used += snprintf(buf + used, bufsize - used, "43 %02X", (unsigned int)count);
+    const char* modeByte = !strcmp(cmd, "02") ? "42" : "43";
+    used += snprintf(buf + used, bufsize - used, "%s %02X", modeByte,
+      (unsigned int)count);
     for (byte i = 0; i < count; i++) {
       if (used >= bufsize - 7) break;  // منع تجاوز buf إطلاقاً
       used += snprintf(buf + used, bufsize - used, " %02X %02X",
         (dtc[i] >> 8) & 0xFF, dtc[i] & 0xFF);
     }
     n = used;
-    if (!strcmp(cmd, "03")) {
+    if (!strcmp(cmd, "03") || !strcmp(cmd, "02")) {
       dtcRefreshRequested = true;
     }
   } else if (!strcmp(cmd, "DTC?")) {

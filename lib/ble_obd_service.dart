@@ -91,6 +91,9 @@ class BleObdService {
     'ATE0', 'ATE1', 'VIN', 'LAT', 'LNG', 'ALT', 'SAT', 'SPD', 'CRS',
     // أوامر DTC المقترحة (بعد تحديث الفيرموير، انظر firmware_patch/)
     'DTC?', 'DTCS?', 'DTCS>', 'DTCCLR',
+    // أوامر وضع 02 (إطار التجميد) ووضع 03 القياسية — مدعومة في
+    // processBLE() بالفيرموير v5 (الفرع الموحّد "03"/"02"/"DTCS?").
+    '02', '03',
   };
 
   static const Set<String> _firmwareSupportedPrefixes = {

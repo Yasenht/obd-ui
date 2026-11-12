@@ -532,9 +532,7 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  // ============================================================
-  // الفحص السريع
-  // ============================================================
+
 
   Future<PidReading?> readPid(int pid, String title) async {
     log('READ PID START: $pid');
@@ -611,13 +609,7 @@ class AppController extends ChangeNotifier {
       return null;
     }
   }
-  /// تقسيم رد الجهاز الخام إلى عناصر مصفوفة `codes` **دون أي فك محلي**.
-  ///
-  /// هذا هو مسار التوجيه المباشر: رد الجهاز (مثل "P0128, P0420, P0430"
-  /// أو "p0128 p0420 p0430") لا يمرّ على parseDtc ولا يُفكّ بايتياً —
-  /// يُقسّم فقط على الفواصل/المسافات/الأسطر ويُرسل عناصره للباك إند
-  /// كما وصلت (مع تطبيع بسيط: تشذيب وحروف كبيرة، والمزيد من التسوية
-  /// داخل DtcAnalysisService وفق قيود InputAnalyzeDtcSchema).
+ 
   static List<String> splitDtcTokens(String response) {
     return response
         .split(RegExp(r'[,;\s]+'))
@@ -633,23 +625,15 @@ class AppController extends ChangeNotifier {
   /// عبر [analyzeDtcCodes] بعد تقسيمه إلى عناصر فقط — فلا اشتراط
   /// لصيغة "43 ..." البايتية، ويكفي رد نصي مثل "P0128, P0420, P0430".
   Future<String?> readDtc() async {
-    // أولاً: الأمر القياسي mode-03 "03\r" — هذا هو الكود الفعلي المطلوب
-    // إرساله لقراءة أكواد الأعطال (طلبات OBD-II القياسية عبر أي جسر
-    // ELM327/OBD-II). الرد المتوقع نص الأكواد مباشرة أو رد mode-03.
-    // ثانياً: إن لم يصل رد صالح (خطأ أو انقطاع) نجرّب أمر "DTCS?" الخاص
-    // بفيرموير telelogger المُرقّع (firmware_patch/telelogger_dtc.patch)
-    // لأنه يرد من ذاكرة الأكواد المخزنة، ولأن "03" غير مدرج في قائمة
-    // أوامر processBLE حتى الفيرموير المرقّع.
+    
     final stopwatch = Stopwatch()..start();
     log('DTC FLOW: ================= <start> =================');
 
-    // فحص جديد: لا نعرض نتائج تحليل فحص سابق أثناء الجلب.
+    
     _resetDtcAnalysis();
     notifyListeners();
 
-    // محاولة واحدة: إرسال، تسجيل ما قبل/ما بعد، وتصنيف مرحلة الفشل
-    // عند غياب الرد: "لم يصل رد" (TimeoutException بعد نجاح الكتابة)
-    // تعني استقبال (FFE2)، وأي رسالة أخرى تعني إرسال (FFE1/اتصال).
+ 
     Future<String?> attempt(String label, String command) async {
       log('DTC FLOW: قبل الإرسال — "$label" عبر خاصية الكتابة FFE1 '
           '(الحالة: $_status، الجهاز: ${bleService.connectedDevice != null ? 'موجود' : 'مفقود'})');
@@ -669,17 +653,12 @@ class AppController extends ChangeNotifier {
 
     var response = await attempt('03', ObdCommands.readDtc);
 
-    // مبدأ التوجيه المباشر: رد الجهاز لا يُمرّر على parseDtc ولا يُفك
-    // محلياً إطلاقاً — يُقسّم حصراً على الفواصل/المسافات ليصبح مصفوفة
-    // النصوص التي يطلبها InputAnalyzeDtcSchema، ثم يُرسل للباك إند
-    // كما وصل. (parseDtc يبقى مخصصاً لعرض سجلات (تاريخ) فقط.)
+   
     var codes = response == null
         ? const <String>[]
         : splitDtcTokens(response);
 
-    // الإعادة بأمر "DTCS?" فقط حين لا يصل رد صالح: لا رد إطلاقاً،
-    // أو رد خطأ صريح ("ERROR"/"NO DATA"). ولا تُعاد المحاولة حين وصل
-    // نص الأكواد نفسه — فهو يُرسل مباشرة كما هو.
+    
     if (response == null || ObdParser.isError(response)) {
       if (response != null) {
         log('DTC FLOW: رد "03" = "${response.trim()}" خطأ — إعادة '
@@ -738,8 +717,89 @@ class AppController extends ChangeNotifier {
     return response;
   }
 
-  /// إرسال أكواد الأعطال المستخرجة من رد الجهاز إلى خدمة التحليل.
+  /// قراءة أكواد الأعطال من إطار التجميد (وضع 02 — الأمر "02").
   ///
+  /// الفيرموير v5 يرد بصيغة وضع 03 نفسها لكن بايت الوضع "42" بدل "43"
+  /// (مثال كودين: "42 02 01 08 01 09" → P0108، P0109). الرد بايتي،
+  /// لذا يُفك محلياً بـ [ObdParser.parseDtc] أولاً ثم تُرسل الأكواد
+  /// المفكوكة (لا الرموز الخام مثل "42"/"02") إلى خدمة التحليل —
+  /// على خلاف [readDtc] الذي يمرّر نص الرد كما وصل.
+  Future<String?> readDtcFreezeFrame() async {
+    final stopwatch = Stopwatch()..start();
+    log('DTC FLOW (02): ================= <start> =================');
+
+    _resetDtcAnalysis();
+    notifyListeners();
+
+    final response = await executeCommand(
+      'قراءة أكواد إطار التجميد (02)',
+      ObdCommands.readFreezeFrame,
+    );
+    log('DTC FLOW (02): الرد الخام (${stopwatch.elapsedMilliseconds}ms): '
+        '${response ?? "NULL"}');
+
+    if (response == null) {
+      log('DTC FLOW (02): ================= <end: فشل> ==================');
+      return null;
+    }
+
+    if (ObdParser.isError(response)) {
+      final trimmed = response.trim();
+      log('DTC FLOW (02): ردّ بخطأ: "$trimmed"');
+      _dtcCodes = <String>[];
+      _hasReadDtc = false;
+      _resetDtcAnalysis();
+      _error = 'قراءة أكواد إطار التجميد: ردّ الجهاز "$trimmed". '
+          'تأكد من تحميل الفيرموير v5 المحدّث (دعم الأمر "02") على الجهاز.';
+      notifyListeners();
+      log('DTC FLOW (02): ================= <end: ERROR> ==================');
+      return null;
+    }
+
+    // فك محلي: الصيغة البايتية "42 ..." تُفك بـ parseDtc (الذي يقبل
+    // بايتي الرد 43 و42 بنفس المنطق) قبل أي عرض أو إرسال للتحليل.
+    final codes = ObdParser.parseDtc(response);
+    log('DTC FLOW (02): أكواد مفكوكة محلياً: $codes');
+
+    _dtcCodes = codes;
+    _hasReadDtc = true;
+    _error = null;
+    notifyListeners();
+
+    // لا نحظر عرض الأكواد المحلية بانتظار التحليل؛ الشاشة تعرض
+    // حالة "جارٍ التحليل" ثم تُحدَّث تلقائياً عند وصول الاستجابة.
+    unawaited(analyzeDtcCodes(codes));
+    log('DTC FLOW (02): ================= <end: نجاح> ==================');
+    return response;
+  }
+
+  
+  Future<String?> clearFaultCodes() async {
+    final response = await executeCommand(
+      'مسح أكواد الأعطال (04)',
+      ObdCommands.clearDtc,
+    );
+    if (response == null) return null;
+
+    // ردّ الجهاز بخطأ: ذاكرة الأكواد لم تُمسح — لا نغيّر الحالة المحلية.
+    if (ObdParser.isError(response)) {
+      _error = 'فشل مسح الأكواد: ردّ الجهاز "${response.trim()}" — '
+          'لم تُمسح ذاكرة الأكواد.';
+      notifyListeners();
+      return null;
+    }
+
+    // المسح نجح: القائمة المحلية (آخر قراءة) لم تعد تعبّر عن الوحدة.
+    _dtcCodes = <String>[];
+    _hasReadDtc = true;
+    _resetDtcAnalysis();
+    _error = null;
+    notifyListeners();
+    log('DTC CLEAR: الأمر "04" نُفّذ — ذاكرة الأكواد مُمسحة');
+    return response;
+  }
+
+  /// إرسال أكواد الأعطال المستخرجة من رد الجهاز إلى خدمة التحليل.
   /// [codes] هي عناصر الرد الخام بعد تقسيمها فقط (توجيه مباشر بلا فك
   /// محلي؛ قد تكون فارغة، وحينها تعيد الخدمة حالة "السيارة سليمة").
   Future<void> analyzeDtcCodes(List<String> codes) async {
@@ -767,9 +827,7 @@ class AppController extends ChangeNotifier {
     _dtcAnalysisLoading = false;
   }
 
-  // ============================================================
-  // المنفذ اليدوي (أوامر ELM327 مخصصة)
-  // ============================================================
+
 
   Future<String?> sendManualCommand(String typed) async {
     typed = typed.trim();
@@ -785,12 +843,9 @@ class AppController extends ChangeNotifier {
       return null;
     }
 
-    // القراءة القديمة لا تعبّر عن الأمر الجديد — تُمسح قبل البدء
-    // (تعاد بالضبط عند نجاح فك أمر 01xx عبر [readPid]).
     _lastPidReading = null;
 
-    // تعقيم المدخل: إزالة المحارف الشائبة ( "-", مسافات، "<" من لوحة
-    // الاتجاه RTL، محارف مخفية من لصق النص) بحيث يعمل "-03" مثل "03".
+    
     final normalized =
         typed.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9_?=>]'), '');
 
@@ -800,9 +855,7 @@ class AppController extends ChangeNotifier {
       return null;
     }
 
-    // كل معاملات Mode-01 القياسية (0100، 010C، 010D، 0111 ...)
-    // تُمرر عبر قارئ PID لتحليلها وعرض قيمتها في ورقة النتيجة.
-    // العنوان يأخذ معنى الأمر من الكتالوج (لا "فحص PID 0C" مثلاً).
+   
     final pidMatch = RegExp(r'^01([0-9A-F]{2})$').firstMatch(normalized);
     if (pidMatch != null) {
       final pid = int.parse(pidMatch.group(1)!, radix: 16);
@@ -810,20 +863,25 @@ class AppController extends ChangeNotifier {
       return (await readPid(pid, 'فحص $label'))?.raw;
     }
 
-    // أوامر الأعطال: "03" القياسي أو "DTCS?"/"DTC?" (فيرموير مرقّع).
+    // أوامر الأعطال: "03" القياسي أو "DTCS?"/"DTC?" (فيرموير مرقّع)
+    // → قارئ وضع 03، و"02" القياسي → قارئ إطار التجميد (وضع 02).
     final dtcMatch = RegExp(r'^(0?3|DTCS\?|DTC\?)$').hasMatch(normalized);
     if (dtcMatch) {
       log('DTC FLOW: الأمر اليدوي "$normalized" أُعيد توجيهه إلى قارئ أكواد الأعطال.');
       return readDtc();
+    }
+    final freezeMatch = RegExp(r'^0?2$').hasMatch(normalized);
+    if (freezeMatch) {
+      log('DTC FLOW (02): الأمر اليدوي "$normalized" أُعيد توجيهه إلى '
+          'قارئ أكواد إطار التجميد.');
+      return readDtcFreezeFrame();
     }
 
     final command = normalized.endsWith('\r') ? normalized : '$normalized\r';
     return executeCommand('أمر يدوي: $normalized', command);
   }
 
-  // ============================================================
-  // البيانات الحية عبر BLE
-  // ============================================================
+  
 
   void toggleLive(bool enabled) {
     // المركبات غير المدعومة (≤ 2005) لا تُقرأ منها بيانات حية.
@@ -836,7 +894,6 @@ class AppController extends ChangeNotifier {
     _liveEnabled = enabled;
     notifyListeners();
     if (enabled) {
-      // قراءة أولى فورية ثم دورة كل 5 ثوانٍ.
       unawaited(_liveTick());
       _liveTimer?.cancel();
       _liveTimer =
@@ -857,16 +914,12 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _liveTick() async {
-    // حماية التسلسل: لا قراءة انشغالاً (_busy)، ولا دورة قيد التنفيذ،
-    // ولا تلقّي بدون اتصال (القسم يتوقف تلقائياً عند الانقطاع)،
-    // ولا قراءة من مركبة لا تدعم OBD-II.
+  
     if (!_connected || _busy || _liveFetching || vehicleUnsupported) return;
     _liveFetching = true;
     notifyListeners();
     try {
-      // لكل مؤشر: الرد المباشر من الفيرموير ("1616" أو "12.34") وكذلك
-      // الصيغة القياسية "41 0C ..." يفكّه ObdParser.parsePid. فشل
-      // قراءة مؤشر واحد لا يمنع البقية، ويُحفظ آخر قيمة ناجحة.
+     
       final rpm = await _readLiveMetric<num>(
         label: 'RPM',
         command: '010C\r',
@@ -905,26 +958,24 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  /// قراءة تعديل وقود قصير/طويل المدى وحساب مجموعهما.
-  /// تُستدعى عند ضغط الزر — كل ضغطة تُرسل الأمرين "0106" و"0107" من
-  /// جديد وتعيد الحساب من ردود الجهاز الفعلية.
-  /// الصيغة المعيارية لكل منهما: النسبة المئوية = A - 128،
-  /// والمجموع النهائي = STFT + LTFT.
+
   Future<void> readFuelTrims() async {
-    // نفس حواجز التنفيذ: لا قراءة بلا اتصال أو أثناء انشغال، ولا قراءة
-    // متزامنة مكررة، ولا من مركبة لا تدعم OBD-II.
+
     if (!_connected || _busy || _fuelTrimReading || vehicleUnsupported) return;
     _fuelTrimReading = true;
     notifyListeners();
     try {
+    
       final stft = await _readLiveMetric<num>(
         label: 'STFT',
         command: ObdCommands.readStft,
+        timeout: const Duration(seconds: 5),
         parse: (response) => ObdParser.parsePid(pid: 0x06, response: response).value,
       );
       final ltft = await _readLiveMetric<num>(
         label: 'LTFT',
         command: ObdCommands.readLtft,
+        timeout: const Duration(seconds: 5),
         parse: (response) => ObdParser.parsePid(pid: 0x07, response: response).value,
       );
 
@@ -941,16 +992,16 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  /// قراءة مؤشر حي واحد عبر BLE: يعيد القيمة المفكوكة أو null عند الفشل.
   Future<T?> _readLiveMetric<T extends num>({
     required String label,
     required String command,
     required T? Function(String response) parse,
+    Duration timeout = const Duration(seconds: 3),
   }) async {
     try {
       final response = await bleService.sendCommand(
         command,
-        timeout: const Duration(seconds: 3),
+        timeout: timeout,
       );
       final value = parse(response);
       if (value != null) log('LIVE: $label = $value');

@@ -665,7 +665,31 @@ void processBLE(int timeout)
     } else if (!strcmp(cmd, "FS")) {
         n += snprintf(buf + n, bufsize - n, "%u", store.size());
 
-    } else if (strlen(cmd) == 4 &&
+    } } else if (!strcmp(cmd, "04") || !strcmp(cmd, "CLR")) {
+    if (!logger.checkState(STATE_OBD_READY)) {
+        n += snprintf(buf + n, bufsize - n, "ERROR (OBD not ready)");
+    } else {
+        char resp[64];
+        if (obd.sendCommand("04\r", resp, sizeof(resp), 3000) && strstr(resp, "44")) {
+            n += snprintf(buf + n, bufsize - n, "44");
+        } else {
+            n += snprintf(buf + n, bufsize - n, "ERROR");
+        }
+    }
+
+} else if (strlen(cmd) == 6 && cmd[0] == '0' && cmd[1] == '2') {
+    // Freeze Frame مثل: 020C00 (PID=0C, frame=00)
+    if (!logger.checkState(STATE_OBD_READY)) {
+        n += snprintf(buf + n, bufsize - n, "N/A");
+    } else {
+        char req[16], resp[64];
+        snprintf(req, sizeof(req), "%s\r", cmd);
+        if (obd.sendCommand(req, resp, sizeof(resp), 2000) && strstr(resp, "42")) {
+            n += snprintf(buf + n, bufsize - n, "%s", resp);
+        } else {
+            n += snprintf(buf + n, bufsize - n, "N/A");
+        }
+    }else if (strlen(cmd) == 4 &&
                cmd[0] == '0' &&
                cmd[1] == '1') {
 
