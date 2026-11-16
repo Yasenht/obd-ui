@@ -9,6 +9,7 @@ import 'fault_details_screen.dart';
 import 'home_widgets/home_sections.dart';
 import 'main_shell.dart';
 import '../services/vehicle_catalog.dart';
+import '../widgets/vehicle_picker.dart';
 
 /// إجراءات الفحص السريع المتاحة في الشاشة الرئيسية.
 enum QuickScanAction { dtc, engineStatus, liveData, emissions, vehicleInfo }
@@ -336,7 +337,7 @@ class _HomeScreenState extends State<HomeScreen> {
             width: 52,
             height: 52,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.16),
+              color: Colors.white.withValues(alpha: 0.16),
               borderRadius: BorderRadius.circular(14),
             ),
             child: const Icon(
@@ -362,7 +363,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Text(
                   'اتصل بجهاز التشخيص وافحص حالة سيارتك في دقائق',
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.85),
+                    color: Colors.white.withValues(alpha: 0.85),
                     fontSize: 12,
                     height: 1.4,
                   ),
@@ -391,87 +392,41 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 1) الماركة — قائمة الماركات الشائعة.
-            DropdownButtonFormField<String>(
-              initialValue: make,
-              decoration: const InputDecoration(
-                labelText: 'ماركة السيارة',
-                prefixIcon: Icon(Icons.directions_car_rounded, size: 19),
-              ),
-              items: VehicleCatalog.makes
-                  .map((m) => DropdownMenuItem<String>(
-                        value: m,
-                        child: Text(
-                          m,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: palette.text,
-                          ),
-                          textDirection: TextDirection.ltr,
-                        ),
-                      ))
-                  .toList(),
-              onChanged: controller.busy
-                  ? null
-                  : (value) => controller.setVehicle(make: value),
+            // 1) الماركة — منتقي قابل للبحث (ورقة سفلية بترشيح حي).
+            VehiclePickerField(
+              label: 'ماركة السيارة',
+              hint: 'اضغط للاختيار والبحث',
+              value: make,
+              values: VehicleCatalog.makes,
+              icon: Icons.directions_car_rounded,
+              enabled: !controller.busy,
+              onChanged: (value) => controller.setVehicle(make: value),
             ),
             const SizedBox(height: 10),
 
-            // 2) الموديل — يتبع الماركة المختارة.
-            DropdownButtonFormField<String>(
-              initialValue: model,
-              decoration: const InputDecoration(
-                labelText: 'الموديل',
-                prefixIcon: Icon(Icons.commute_rounded, size: 19),
-              ),
-              items: models
-                  .map((m) => DropdownMenuItem<String>(
-                        value: m,
-                        child: Text(
-                          m,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: palette.text,
-                          ),
-                          textDirection: TextDirection.ltr,
-                        ),
-                      ))
-                  .toList(),
-              onChanged:
-                  make == null || controller.busy ? null : (value) => controller.setVehicle(model: value),
-              disabledHint: Text(
-                make == null ? 'اختر الماركة أولاً' : 'اختر موديلاً',
-                style: TextStyle(fontSize: 12, color: palette.textMuted),
-              ),
+            // 2) الموديل — منتقي قابل للبحث، يتبع الماركة المختارة.
+            VehiclePickerField(
+              label: 'الموديل',
+              hint: 'اختر موديلاً',
+              value: model,
+              values: models,
+              icon: Icons.commute_rounded,
+              enabled: make != null && !controller.busy,
+              disabledHint: make == null ? 'اختر الماركة أولاً' : null,
+              onChanged: (value) => controller.setVehicle(model: value),
             ),
             const SizedBox(height: 10),
 
-            // 3) سنة الصنع — تنازلياً من السنة الحالية إلى 1960.
-            DropdownButtonFormField<int>(
-              initialValue: year,
-              decoration: const InputDecoration(
-                labelText: 'سنة الصنع',
-                prefixIcon: Icon(Icons.event_available_rounded, size: 19),
-              ),
-              items: years
-                  .map((y) => DropdownMenuItem<int>(
-                        value: y,
-                        child: Text(
-                          '$y',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: palette.text,
-                          ),
-                          textDirection: TextDirection.ltr,
-                        ),
-                      ))
-                  .toList(),
-              onChanged:
-                  make == null || controller.busy ? null : (value) => controller.setVehicle(year: value),
-              disabledHint: Text(
-                make == null ? 'اختر الماركة أولاً' : 'اختر سنة الصنع',
-                style: TextStyle(fontSize: 12, color: palette.textMuted),
-              ),
+            // 3) سنة الصنع — منتقي قابل للبحث (تنازلياً من السنة الحالية إلى 1960).
+            VehicleYearPickerField(
+              label: 'سنة الصنع',
+              hint: 'اختر سنة الصنع',
+              value: year,
+              values: years,
+              icon: Icons.event_available_rounded,
+              enabled: make != null && !controller.busy,
+              disabledHint: make == null ? 'اختر الماركة أولاً' : null,
+              onChanged: (value) => controller.setVehicle(year: value),
             ),
             const SizedBox(height: 10),
             if (controller.hasVehicleSelection) ...[
@@ -510,13 +465,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: controller.vehicleUnsupported
-                      ? AppColors.error.withOpacity(0.08)
-                      : palette.onPrimary.withOpacity(0.08),
+                      ? AppColors.error.withValues(alpha: 0.08)
+                      : palette.onPrimary.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(kRadiusSmall),
                   border: Border.all(
                     color: controller.vehicleUnsupported
-                        ? AppColors.error.withOpacity(0.3)
-                        : palette.onPrimary.withOpacity(0.3),
+                        ? AppColors.error.withValues(alpha: 0.3)
+                        : palette.onPrimary.withValues(alpha: 0.3),
                   ),
                 ),
                 child: Row(
@@ -719,7 +674,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   width: 42,
                   height: 42,
                   decoration: BoxDecoration(
-                    color: accent.withOpacity(0.10),
+                    color: accent.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(icon, color: accent, size: 22),
@@ -1032,7 +987,7 @@ class _QuickScanTile extends StatelessWidget {
       child: InkWell(
         onTap: enabled ? onTap : null,
         borderRadius: BorderRadius.circular(kRadius),
-        splashColor: palette.onPrimary.withOpacity(0.10),
+        splashColor: palette.onPrimary.withValues(alpha: 0.10),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
@@ -1042,7 +997,7 @@ class _QuickScanTile extends StatelessWidget {
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: palette.onPrimary.withOpacity(0.10),
+                  color: palette.onPrimary.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(icon, size: 19, color: palette.onPrimary),

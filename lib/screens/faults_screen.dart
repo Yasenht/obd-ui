@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:printing/printing.dart';
 
 import '../controllers/app_controller.dart';
 import '../controllers/app_scope.dart';
@@ -112,6 +113,8 @@ class FaultsScreen extends StatelessWidget {
           const _FreezeFrameSection(),
           const SizedBox(height: 12),
           const _ClearFaultsSection(),
+          const SizedBox(height: 12),
+          const _ExportReportSection(),
         ],
       );
     }
@@ -161,6 +164,8 @@ class FaultsScreen extends StatelessWidget {
           const _FreezeFrameSection(),
           const SizedBox(height: 12),
           const _ClearFaultsSection(),
+          const SizedBox(height: 12),
+          const _ExportReportSection(),
         ],
       );
     }
@@ -206,6 +211,8 @@ class FaultsScreen extends StatelessWidget {
           const _FreezeFrameSection(),
           const SizedBox(height: 12),
           const _ClearFaultsSection(),
+          const SizedBox(height: 12),
+          const _ExportReportSection(),
         ],
       ),
     );
@@ -239,7 +246,7 @@ class _AnalysisHeader extends StatelessWidget {
                 width: 38,
                 height: 38,
                 decoration: BoxDecoration(
-                  color: AppColors.error.withOpacity(0.09),
+                  color: AppColors.error.withValues(alpha: 0.09),
                   borderRadius: BorderRadius.circular(11),
                 ),
                 child: const Icon(Icons.report_gmailerrorred_rounded,
@@ -555,6 +562,132 @@ class _FieldLine extends StatelessWidget {
 }
 
 // ============================================================
+// قسم تصدير تقرير التشخيص PDF — يجمع نتائج آخر فحص فعلي
+// (المركبة وVIN، وقت الفحص، الأكواد، إطار التجميد، MIL/I-M،
+// البيانات الحية، شرح الأعطال والتوصيات) ويشاركه كمستند PDF.
+// ============================================================
+
+class _ExportReportSection extends StatelessWidget {
+  const _ExportReportSection();
+
+  Future<void> _export(BuildContext context) async {
+    final controller = context.controller;
+    final bytes = await controller.generateReportPdf();
+    if (!context.mounted) return;
+    if (bytes == null) {
+      await showResultSheet(
+        context,
+        title: 'تصدير تقرير PDF',
+        success: false,
+        summary: controller.reportError ??
+            'تعذر توليد التقرير — راجع رسالة الخطأ.',
+      );
+      return;
+    }
+
+    // مشاركة/حفظ المستند عبر نافذة النظام (كتابة/بريد/سحابة).
+    final filename = 'DriveScope-report-'
+        '${DateTime.now().toIso8601String().split('T').first}.pdf';
+    final shared = await Printing.sharePdf(
+      bytes: bytes,
+      filename: filename,
+      subject: 'تقرير تشخيص المركبة',
+    );
+    if (!context.mounted) return;
+    await showResultSheet(
+      context,
+      title: 'تصدير تقرير PDF',
+      success: shared,
+      summary: shared
+          ? 'تولّد التقرير ووصلت نافذة المشاركة — اختر تطبيقاً لحفظه '
+              'أو إرساله.'
+          : 'أُغلق نموذج المشاركة دون حفظ — أعد المحاولة.',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = Palette.of(context);
+    final controller = context.controller;
+    // التقرير من بيانات آخر فحص فعلي — لا معنى له قبل أي فحص.
+    final enabled =
+        controller.hasReadDtc && !controller.busy && !controller.reportGenerating;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: palette.onPrimary.withValues(alpha: 0.09),
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: Icon(Icons.picture_as_pdf_rounded,
+                      color: palette.onPrimary, size: 21),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'تقرير تشخيص PDF',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13.5,
+                          color: palette.text,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'يجمع في مستند واحد: معلومات المركبة ورقم الهيكل '
+                        '(VIN)، تاريخ الفحص، الأكواد المكتشفة، إطار '
+                        'التجميد، حالة MIL وجاهزية I/M، البيانات الحية، '
+                        'وشرح الأعطال مع توصيات الإصلاح.',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: palette.textMuted,
+                          height: 1.45,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 44,
+              child: ElevatedButton.icon(
+                onPressed: enabled ? () => _export(context) : null,
+                icon: controller.reportGenerating
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.ios_share_rounded, size: 19),
+                label: Text(controller.hasReadDtc
+                    ? 'تصدير التقرير ومشاركته'
+                    : 'أجرِ فحصاً أولاً'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
 // قسم قراءة أكواد إطار التجميد (أمر 02) — وضع Freeze Frame:
 // الأكواد التي كانت سارية لحظة تخزين الإطار المجمد. أمر قراءة
 // آمن بلا تأكيد (لا يحذف شيئاً)، بنقرة واحدة بلا إدخال يدوي.
@@ -608,7 +741,7 @@ class _FreezeFrameSection extends StatelessWidget {
                   width: 38,
                   height: 38,
                   decoration: BoxDecoration(
-                    color: AppColors.olive.withOpacity(0.09),
+                    color: AppColors.olive.withValues(alpha: 0.09),
                     borderRadius: BorderRadius.circular(11),
                   ),
                   child: const Icon(Icons.camera_roll_rounded,
@@ -662,7 +795,7 @@ class _FreezeFrameSection extends StatelessWidget {
 }
 
 // ============================================================
-// قسم مسح أكواد الأعطال المخزنة (أمر 04) — إرسال بنقرة واحدة
+// قسم مسح أكواد الأعطال المخزنة (أمر DTCCLR) — إرسال بنقرة واحدة
 // بعد تأكيد صريح من المستخدم، بلا إدخال يدوي.
 // ============================================================
 
@@ -677,7 +810,7 @@ class _ClearFaultsSection extends StatelessWidget {
       builder: (dialogContext) => AlertDialog(
         title: const Text('تأكيد مسح الأعطال'),
         content: const Text(
-          'سيُرسَل الأمر 04 إلى وحدة التحكم وستُحذف كل أكواد الأعطال '
+          'سيُرسَل الأمر DTCCLR إلى وحدة التحكم وستُحذف كل أكواد الأعطال '
           'المخزنة مع بيانات إطار التجميد نهائياً.\n\n'
           'هل أنت متأكد من رغبتك في حذف هذه الأعطال؟ لا يمكن التراجع.',
         ),
@@ -710,8 +843,8 @@ class _ClearFaultsSection extends StatelessWidget {
         context,
         title: 'مسح أكواد الأعطال',
         success: true,
-        summary: 'نُفّذ الأمر 04 — ذاكرة الأكواد في وحدة التحكم مُمسحة. '
-            'نفّذ «فحص أكواد الأعطال» للاطمئنان على النتيجة.',
+        summary: 'نُفّذ الأمر DTCCLR — ذاكرة الأكواد في وحدة التحكم مُمسحة. '
+            'انتظر بضع ثوانٍ ثم نفّذ «فحص أكواد الأعطال» للاطمئنان على النتيجة.',
         raw: raw,
       );
     } else {
@@ -720,7 +853,7 @@ class _ClearFaultsSection extends StatelessWidget {
         title: 'مسح أكواد الأعطال',
         success: false,
         summary:
-            controller.error ?? 'فشل إرسال الأمر 04 — راجع رسالة الخطأ.',
+            controller.error ?? 'فشل إرسال الأمر DTCCLR — راجع رسالة الخطأ.',
       );
     }
   }
@@ -746,7 +879,7 @@ class _ClearFaultsSection extends StatelessWidget {
                   width: 38,
                   height: 38,
                   decoration: BoxDecoration(
-                    color: AppColors.error.withOpacity(0.09),
+                    color: AppColors.error.withValues(alpha: 0.09),
                     borderRadius: BorderRadius.circular(11),
                   ),
                   child: const Icon(Icons.delete_forever_rounded,
@@ -758,7 +891,7 @@ class _ClearFaultsSection extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'مسح أكواد الأعطال (أمر 04)',
+                        'مسح أكواد الأعطال (أمر DTCCLR)',
                         style: TextStyle(
                           fontWeight: FontWeight.w800,
                           fontSize: 13.5,
@@ -767,7 +900,7 @@ class _ClearFaultsSection extends StatelessWidget {
                       ),
                       const SizedBox(height: 3),
                       Text(
-                        'يُرسل الأمر 04 إلى وحدة التحكم لمسح كل الأكواد '
+                        'يُرسل الأمر DTCCLR إلى وحدة التحكم لمسح كل الأكواد '
                         'المخزنة وإطار التجميد — يُنفَّذ بعد تأكيدك فقط '
                         'ولا يمكن التراجع عنه.',
                         style: TextStyle(

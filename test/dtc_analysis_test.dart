@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:DriveScope/models/dtc_analysis.dart';
+import 'package:drive_scope/models/dtc_analysis.dart';
 
 void main() {
   test('يفك استجابة /api/analyze/dtc بكل حقول DtcFaultSchema', () {

@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:DriveScope/controllers/app_controller.dart';
-import 'package:DriveScope/services/vehicle_catalog.dart';
+import 'package:drive_scope/controllers/app_controller.dart';
+import 'package:drive_scope/services/vehicle_catalog.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

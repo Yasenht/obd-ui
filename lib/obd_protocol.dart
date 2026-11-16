@@ -1,5 +1,39 @@
 import 'models.dart';
 
+/// حالة مصباح العطل (MIL) وجاهزية فحص الانبعاثات من رد أمر "0101".
+class MilStatus {
+  const MilStatus({
+    required this.milOn,
+    required this.dtcCount,
+    this.readiness = const <MilReadinessTest>[],
+  });
+
+  /// هل مصباح فحص المحرك (MIL) مضاء؟
+  final bool milOn;
+
+  /// عدد الأكواد المخزنة في وحدة التحكم (7 بتات من بايت A).
+  final int dtcCount;
+
+  /// اختبارات جاهزية I/M المعروفة من بايتات B/C/D (قد تكون فارغة
+  /// إذا جاء رد الفيرموير الرقمي المباشر بلا بايتات جاهزية).
+  final List<MilReadinessTest> readiness;
+
+  /// الاختبارات غير المكتملة منذ آخر مسح للأكواد.
+  List<MilReadinessTest> get incompleteTests =>
+      readiness.where((t) => t.incomplete).toList(growable: false);
+}
+
+/// اختبار جاهزية واحد من بايتات B/C/D لرد "0101".
+class MilReadinessTest {
+  const MilReadinessTest({required this.name, required this.incomplete});
+
+  /// اسم الاختبار بالعربية.
+  final String name;
+
+  /// البت مضبوط = الاختبار غير مكتمل (سيُرفض فحص I/M الرسمي).
+  final bool incomplete;
+}
+
 class ObdCommands {
   static const String readVin = '0902\r';
   static const String battery = 'BATT\r';
@@ -15,14 +49,21 @@ class ObdCommands {
   // (ردّ الوضع يكرّر رقم الوضع المطلوب + 0x40 حسب ISO 15765-4).
   static const String readFreezeFrame = '02\r';
 
-  // مسح أكواد الأعطال المخزنة في وحدة التحكم (mode-04) — يُرسَل بعد
-  // تأكيد صريح من المستخدم لأنه يزيل الأكواد وإطار التجميد نهائياً.
-  static const String clearDtc = '04\r';
+  // مسح أكواد الأعطال المخزنة في وحدة التحكم — يُرسَل بعد تأكيد صريح
+  // من المستخدم لأنه يزيل الأكواد وإطار التجميد نهائياً.
+  //
+  // مهم: الفيرموير (processBLE في telelogger) لا يفهم أمر mode-04
+  // القياسي "04" ويجيبه بـ "ERROR" — أمر المسح المدعوم هو "DTCCLR"
+  // الذي يجيب "OK" ويؤجّل المسح الفعلي إلى process() عند جاهزية OBD.
+  static const String clearDtc = 'DTCCLR\r';
 
   // تعديل الوقود: قصير المدى (STFT) وطويل المدى (LTFT).
   // الصيغة المعيارية: النسبة المئوية = A - 128.
   static const String readStft = '0106\r';
   static const String readLtft = '0107\r';
+
+  // حالة مصباح العطل (MIL) وعدد الأكواد وجاهزية فحص الانبعاثات (I/M).
+  static const String readMil = '0101\r';
 
   // أمر DTC المقترح للفيرموير v5 بعد التحديث (firmware_patch/)؛
   // يعيد رد mode-03 قياسياً مصاغاً ("43 01 08 ...") مخزّناً منذ الإقلاع.
@@ -291,10 +332,18 @@ class ObdParser {
   }) {
     final cleaned = _cleanResponse(response);
 
-    if (isError(cleaned)) {
+    // الأسطر الوسيطة من جسر ELM (SEARCHING.../BUS INIT...) تُتجاهل
+    // قبل فحص الخطأ — نفس منهجية [parseDtc]. فحص isError على الرد
+    // كاملاً كان يرفض ردوداً صحيحة يحملها سطر البانر بعده.
+    final payloadLines = _mergeFrames(cleaned)
+        .where((line) => !_isBannerLine(line))
+        .toList();
+    final payload = payloadLines.join(' ').trim();
+
+    if (isError(payload)) {
       throw ObdProtocolException(
         'تعذر قراءة PID '
-        '${pid.toRadixString(16).toUpperCase()}: $cleaned',
+        '${pid.toRadixString(16).toUpperCase()}: $payload',
       );
     }
 
@@ -306,10 +355,41 @@ class ObdParser {
 
     // هذه القيم جاهزة للتحويل إلى رقم،
     // ولا تحتاج إلى فك بايتات OBD.
-    if (_directNumber.hasMatch(cleaned)) {
-      value = num.parse(cleaned);
+    //
+    // تنبيه: الفيرموير (processBLE) يرد على "01XX" بقيمة عشرية محوّلة
+    // مسبقاً (obdData/normalizeData في FreematicsOBD.cpp)، وPID 0x01
+    // (MIL) و0x00 (خريطة الأوامر) يردان بقيمة بايت A الخام دون تحويل —
+    // لا يجوز عرضها كرقم صرف.
+    if (_directNumber.hasMatch(payload)) {
+      final number = num.parse(payload);
+      switch (pid) {
+        case 0x00:
+          // رد رقمي مباشر: الفيرموير يحوّل خريطة الأوامر إلى قيمة
+          // البايت الأول فقط (PIDs 0x01–0x08) — نفكّ بتاته المتاحة.
+          final supported =
+              _decodeSupportedPids(<int>[number.toInt() & 0xFF], 1);
+          value = supported.length;
+          detail = supported.isEmpty
+              ? 'لا أوامر مدعومة في البايت الأول (PIDs 01–08)'
+              : '${_supportedPidsText(supported, 0x01, 0x08)} '
+                  '(رد الفيرموير الرقمي يغطي البايت الأول فقط)';
+          break;
+
+        case 0x01:
+          // القيمة هي بايت A الخام: البت الأعلى = مصباح العطل (MIL)
+          // والبقية = عدد الأكواد المخزنة.
+          final rawByte = number.toInt() & 0xFF;
+          final mil = (rawByte & 0x80) != 0;
+          final faults = rawByte & 0x7F;
+          value = faults;
+          detail = 'MIL: ${mil ? 'مضاء' : 'مطفأ'} • عدد الأكواد: $faults';
+          break;
+
+        default:
+          value = number;
+      }
     } else {
-      final bytes = hexBytes(cleaned);
+      final bytes = hexBytes(payload);
       final markerIndex = _indexOf(
         bytes,
         [0x41, pid],
@@ -321,7 +401,7 @@ class ObdParser {
       if (markerIndex < 0 && pid == 0x00 && bytes.length >= 4) {
         final supported = _decodeSupportedPids(bytes.sublist(0, 4), 1);
         if (supported.isEmpty) {
-          throw ObdProtocolException('خريطة أوامر فارغة: $cleaned');
+          throw ObdProtocolException('خريطة أوامر فارغة: $payload');
         }
         return PidReading(
           pid: pid,
@@ -335,7 +415,7 @@ class ObdParser {
 
       if (markerIndex < 0 || markerIndex + 2 >= bytes.length) {
         throw ObdProtocolException(
-          'رد PID غير معروف أو غير مكتمل: $cleaned',
+          'رد PID غير معروف أو غير مكتمل: $payload',
         );
       }
 
@@ -355,7 +435,7 @@ class ObdParser {
           }
           final supported = _decodeSupportedPids(bitmap, 1);
           if (supported.isEmpty) {
-            throw ObdProtocolException('رد 0100 بلا أوامر مدعومة: $cleaned');
+            throw ObdProtocolException('رد 0100 بلا أوامر مدعومة: $payload');
           }
           value = supported.length;
           detail = _supportedPidsText(supported, 0x01, 0x20);
@@ -706,6 +786,94 @@ class ObdParser {
       if (rest[i] != 0) return false;
     }
     return true;
+  }
+
+  /// فك رد أمر "0101" إلى حالة MIL وجاهزية فحص الانبعاثات.
+  ///
+  /// يدعم الصيغتين:
+  /// 1. القياسية "41 01 A B C D": A (البت الأعلى MIL + 7 بتات عدد
+  ///    الأكواد) وB/C/D (أعلام جاهزية I/M منذ آخر مسح للأكواد).
+  /// 2. رد الفيرموير الرقمي المباشر: بايت A فقط (بلا جاهزية).
+  ///
+  /// يعيد null إذا كان الرد خطأ أو بلا بايتات قابلة للفك.
+  static MilStatus? parseMilStatus(String response) {
+    final cleaned = _cleanResponse(response);
+    if (isError(cleaned)) return null;
+
+    // رد رقمي مباشر (فيرموير Freematics): بايت A وحده.
+    if (_directNumber.hasMatch(cleaned)) {
+      final a = int.tryParse(cleaned);
+      if (a == null || a < 0 || a > 255) return null;
+      return MilStatus(
+        milOn: (a & 0x80) != 0,
+        dtcCount: a & 0x7F,
+      );
+    }
+
+    for (final line in _mergeFrames(response)) {
+      if (_isBannerLine(line)) continue;
+      final bytes = hexBytes(line);
+      final marker = _indexOf(bytes, const [0x41, 0x01]);
+      if (marker < 0) continue;
+
+      final rest = bytes.sublist(marker + 2);
+      if (rest.isEmpty) continue;
+      final a = rest[0];
+      final b = rest.length > 1 ? rest[1] : 0;
+      final c = rest.length > 2 ? rest[2] : 0;
+      final d = rest.length > 3 ? rest[3] : 0;
+
+      return MilStatus(
+        milOn: (a & 0x80) != 0,
+        dtcCount: a & 0x7F,
+        readiness: _decodeReadiness(b, c, d),
+      );
+    }
+    return null;
+  }
+
+  /// أسماء اختبارات جاهزية I/M (عربي) بحسب بتات بايتات B/C/D
+  /// في رد "0101" — البت المضبوط يعني الاختبار غير مكتمل.
+  static const Map<int, String> _readinessB = <int, String>{
+    0x01: 'أخطاء الاشتعال (Misfire)',
+    0x02: 'نظام الوقود',
+    0x04: 'المكونات الرئيسية',
+  };
+
+  static const Map<int, String> _readinessC = <int, String>{
+    0x02: 'المحفّز (Catalyst)',
+    0x04: 'المحفّز المسخّن',
+    0x08: 'نظام التبخير (EVAP)',
+    0x10: 'نظام الهواء الثانوي',
+    0x20: 'مكيّف وتبريد العادم (A/C)',
+    0x40: 'حسّاسات الأكسجين (O2)',
+    0x80: 'مسخّنات حسّاسات O2',
+  };
+
+  static const Map<int, String> _readinessD = <int, String>{
+    0x01: 'إعادة تدوير العادم (EGR)',
+    0x02: 'محفّز الهيدروكربونات غير الميثانية (NMHC)',
+    0x04: 'اختزال أكاسيد النيتروجين (NOx/SCR)',
+    0x08: 'ضغط الشحن (Turbo)',
+    0x10: 'حسّاسات العادم',
+    0x20: 'مرشّح الجسيمات (PM)',
+  };
+
+  static List<MilReadinessTest> _decodeReadiness(int b, int c, int d) {
+    final tests = <MilReadinessTest>[];
+    void decodeByte(int byte, Map<int, String> names) {
+      for (final entry in names.entries) {
+        tests.add(MilReadinessTest(
+          name: entry.value,
+          incomplete: (byte & entry.key) != 0,
+        ));
+      }
+    }
+
+    decodeByte(b, _readinessB);
+    decodeByte(c, _readinessC);
+    decodeByte(d, _readinessD);
+    return tests;
   }
 
   static bool isValidVin(String vin) {

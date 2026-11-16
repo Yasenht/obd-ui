@@ -21,11 +21,10 @@ class DiscoveredObdDevice {
 
   BluetoothDevice get device => result.device;
   String get name {
+    // الاسم الأول: advName من بيانات الإعلان (البديل الرسمي لـ
+    // localName المهجور في flutter_blue_plus — نفس القيمة).
     final advName = result.advertisementData.advName.trim();
     if (advName.isNotEmpty) return advName;
-
-    final localName = result.advertisementData.localName.trim();
-    if (localName.isNotEmpty) return localName;
 
     final platformName = result.device.platformName.trim();
     if (platformName.isNotEmpty) return platformName;
@@ -125,9 +124,14 @@ class BleObdService {
 
   Future<void> _requestBluetoothPermissions() async {
     if (Platform.isAndroid) {
+      // الأذونات الحرجة للبحث والربط (Android 12+).
       final statuses = await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
+        // على Android 11 وما قبله نتائج البحث BLE تُعدّ بيانات موقع —
+        // دون ACCESS_FINE_LOCATION (معلنة في المانيفست حتى SDK 30)
+        // يعيد المسح قائمة فارغة صمتاً. على 12+ الطلب غير مؤثر.
+        Permission.locationWhenInUse,
       ].request();
 
       final denied = statuses.entries
@@ -135,9 +139,28 @@ class BleObdService {
           .map((entry) => entry.key)
           .toList();
 
-      if (denied.isNotEmpty) {
+      // رفض الموقع غير حاسم على Android 12+ (لم يعلن في المانيفست
+      // بعد SDK 30) — يُسجَّل تنبيه فقط، أما رفض صلاحيات Bluetooth
+      // فيمنع المسح فعلاً.
+      if (denied.contains(Permission.locationWhenInUse)) {
+        _log('تنبيه: رُفضت صلاحية الموقع — على Android 11 وما قبله '
+            'لن تظهر نتائج البحث عن أجهزة BLE.');
+      }
+
+      final bluetoothDenied = statuses.entries
+          .where((entry) =>
+              (entry.key == Permission.bluetoothScan ||
+                  entry.key == Permission.bluetoothConnect) &&
+              !entry.value.isGranted)
+          .map((entry) => entry.key)
+          .toList();
+
+      if (bluetoothDenied.isNotEmpty) {
         final permanentlyDenied = statuses.entries
-            .where((entry) => entry.value == PermissionStatus.permanentlyDenied)
+            .where((entry) =>
+                (entry.key == Permission.bluetoothScan ||
+                    entry.key == Permission.bluetoothConnect) &&
+                entry.value == PermissionStatus.permanentlyDenied)
             .map((entry) => entry.key)
             .toList();
 
@@ -210,12 +233,18 @@ class BleObdService {
     );
 
     try {
+      // الاشتراك في إشارة انتهاء المسح قبل بدئه — الاشتراك بعده كان
+      // يفوّت حدث "false" في المسح القصير فتعلق العملية والتصاق
+      // الحالة بـ "scanning" للأبد.
+      final scanCompleted =
+          FlutterBluePlus.isScanning.where((scanning) => !scanning).first;
+
       await FlutterBluePlus.startScan(
         timeout: timeout,
         androidUsesFineLocation: false,
       );
 
-      await FlutterBluePlus.isScanning.where((scanning) => !scanning).first;
+      await scanCompleted;
 
       if (_currentStatus == ObdConnectionStatus.scanning) {
         _setStatus(ObdConnectionStatus.disconnected);
@@ -471,8 +500,6 @@ class BleObdService {
   }) async {
     final characteristic = _commandCharacteristic;
 
-    _log('BLE TX command: $command');
-    _log('BLE TX bytes: ${command.codeUnits}');
     _log('إرسال أمر OBD: $command');
     if (characteristic == null ||
         _currentStatus != ObdConnectionStatus.connected) {
@@ -525,7 +552,6 @@ class BleObdService {
     _quietTimer?.cancel();
 
     _log('BLE TX command: ${jsonEncode(wireCommand)}');
-
     _log('BLE TX bytes: $bytes');
 
     final timeoutTimer = Timer(timeout, () {

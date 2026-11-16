@@ -199,10 +199,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final summary = reading != null
           ? '${reading.label}: ${reading.displayValue}'
           : ObdParser.describeCommandResult(typed, response);
+      // رد "ERROR"/"NO DATA" وصل فعلاً لكنه ليس نجاحاً — تُعرض الورقة
+      // بحالة فشل بدل الإيحاء بأن الأمر نُفّذ بنجاح.
+      final failed = ObdParser.isError(response);
       showResultSheet(
         context,
-        title: 'الرد الواصل',
-        success: true,
+        title: failed ? 'الرد الواصل (خطأ)' : 'الرد الواصل',
+        success: !failed,
         summary: summary,
         raw: response,
       );

@@ -65,8 +65,7 @@ class _ObdScannerAppState extends State<ObdScannerApp> {
   }
 }
 
-/// غلاف الهيكل الرئيسي — يُشغّل الخدمات (BLE) مرة واحدة عند إقلاع
-/// الواجهة (أذونات الأجهزة أولاً).
+
 class _BootShell extends StatefulWidget {
   const _BootShell();
 
@@ -87,9 +86,7 @@ class _BootShellState extends State<_BootShell> {
   Widget build(BuildContext context) => const MainShell();
 }
 
-// ============================================================
-// شاشة الترحيب السريعة (هوية زيتونية)
-// ============================================================
+
 
 class SplashScreen extends StatelessWidget {
   const SplashScreen({super.key});
@@ -113,15 +110,15 @@ class SplashScreen extends StatelessWidget {
                 width: 104,
                 height: 104,
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.10),
+                  color: Colors.white.withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(26),
                   border: Border.all(
-                    color: Colors.white.withOpacity(0.28),
+                    color: Colors.white.withValues(alpha: 0.28),
                     width: 1.5,
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
+                      color: Colors.black.withValues(alpha: 0.2),
                       blurRadius: 28,
                       spreadRadius: 4,
                     ),

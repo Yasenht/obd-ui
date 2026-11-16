@@ -57,7 +57,7 @@ class AppTheme {
         elevation: isDark ? 0 : 1,
         margin: EdgeInsets.zero,
         clipBehavior: Clip.antiAlias,
-        shadowColor: Colors.black.withOpacity(isDark ? 0 : 0.06),
+        shadowColor: Colors.black.withValues(alpha: isDark ? 0 : 0.06),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
           side: BorderSide(color: border),
@@ -118,7 +118,7 @@ class AppTheme {
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           foregroundColor: primary,
-          side: BorderSide(color: primary.withOpacity(0.5)),
+          side: BorderSide(color: primary.withValues(alpha: 0.5)),
           minimumSize: const Size(0, 42),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           shape: RoundedRectangleBorder(
@@ -149,7 +149,7 @@ class AppTheme {
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: card,
-        indicatorColor: primary.withOpacity(0.14),
+        indicatorColor: primary.withValues(alpha: 0.14),
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         labelTextStyle: WidgetStateProperty.resolveWith((states) {

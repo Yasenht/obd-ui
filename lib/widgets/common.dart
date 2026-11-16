@@ -37,7 +37,7 @@ class SectionHeader extends StatelessWidget {
           width: 38,
           height: 38,
           decoration: BoxDecoration(
-            color: palette.onPrimary.withOpacity(0.10),
+            color: palette.onPrimary.withValues(alpha: 0.10),
             borderRadius: BorderRadius.circular(11),
           ),
           child: Icon(icon, color: palette.onPrimary, size: 20),
@@ -115,9 +115,9 @@ class StatusPill extends StatelessWidget {
         vertical: compact ? 4 : 6,
       ),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.10),
+        color: color.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(30),
-        border: Border.all(color: color.withOpacity(0.30)),
+        border: Border.all(color: color.withValues(alpha: 0.30)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -165,9 +165,9 @@ class ErrorBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
-        color: AppColors.error.withOpacity(0.08),
+        color: AppColors.error.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(kRadiusSmall),
-        border: Border.all(color: AppColors.error.withOpacity(0.25)),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.25)),
       ),
       child: Row(
         children: [
@@ -230,7 +230,7 @@ class EmptyState extends StatelessWidget {
             width: compact ? 48 : 64,
             height: compact ? 48 : 64,
             decoration: BoxDecoration(
-              color: palette.onPrimary.withOpacity(0.08),
+              color: palette.onPrimary.withValues(alpha: 0.08),
               shape: BoxShape.circle,
             ),
             child:
@@ -355,7 +355,7 @@ class DtcCodeBadge extends StatelessWidget {
           vertical: compact ? 2 : 4,
         ),
         decoration: BoxDecoration(
-          color: Palette.of(context).onPrimary.withOpacity(0.10),
+          color: Palette.of(context).onPrimary.withValues(alpha: 0.10),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
@@ -376,7 +376,7 @@ class DtcCodeBadge extends StatelessWidget {
             Icon(
               Icons.copy_rounded,
               size: compact ? 10 : 12,
-              color: Palette.of(context).onPrimary.withOpacity(0.7),
+              color: Palette.of(context).onPrimary.withValues(alpha: 0.7),
             ),
           ],
         ),

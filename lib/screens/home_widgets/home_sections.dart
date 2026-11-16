@@ -35,9 +35,7 @@ class HomeSections {
   static void scrollToConnection(BuildContext context) =>
       scrollInto(context, connectionCardKey);
 
-  // ============================================================
-  // كارت الاتصال بجهاز التشخيص
-  // ============================================================
+
 
   static Widget connectionCard(
     BuildContext context, {
@@ -113,7 +111,7 @@ class HomeSections {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: statusColor.withOpacity(0.10),
+                    color: statusColor.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(13),
                   ),
                   child: Icon(
@@ -206,7 +204,7 @@ class HomeSections {
                         style: OutlinedButton.styleFrom(
                           padding: EdgeInsets.zero,
                           side: BorderSide(
-                              color: AppColors.error.withOpacity(0.5)),
+                              color: AppColors.error.withValues(alpha: 0.5)),
                         ),
                         onPressed:
                             controller.busy ? null : controller.disconnect,
@@ -290,9 +288,6 @@ class HomeSections {
   }
 }
 
-// ============================================================
-/// عنصر جهاز واحد قابلة للنقر للاتصال.
-// ============================================================
 
 class _DeviceTile extends StatelessWidget {
   const _DeviceTile({
@@ -329,8 +324,8 @@ class _DeviceTile extends StatelessWidget {
                   height: 38,
                   decoration: BoxDecoration(
                     color: likelyObd
-                        ? palette.onPrimary.withOpacity(0.12)
-                        : palette.textMuted.withOpacity(0.10),
+                        ? palette.onPrimary.withValues(alpha: 0.12)
+                        : palette.textMuted.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(11),
                   ),
                   child: Icon(
@@ -407,9 +402,7 @@ class _DeviceTile extends StatelessWidget {
   }
 }
 
-// ============================================================
-// قسم البيانات الحية: قراءات BLE المحلية فقط (RPM/السرعة/الحرارة/الجهد).
-// ============================================================
+
 
 Widget liveDataSection(
   BuildContext context, {

@@ -129,9 +129,9 @@ class _FaultDetailsScreenState extends State<FaultDetailsScreen> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppColors.warning.withOpacity(0.08),
+                color: AppColors.warning.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(kRadiusSmall),
-                border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+                border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -277,7 +277,7 @@ class _HeaderCard extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
-                    color: AppColors.error.withOpacity(0.10),
+                    color: AppColors.error.withValues(alpha: 0.10),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(

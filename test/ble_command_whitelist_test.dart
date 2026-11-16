@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:DriveScope/ble_obd_service.dart';
+import 'package:drive_scope/ble_obd_service.dart';
 
 /// اختبار قائمة الأوامر المدعومة في فيرموير Freematics v5
 /// (telelogger.ino → processBLE، مع أوامر DTC الجديدة من رقعة firmware_patch/).

@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:DriveScope/obd_protocol.dart';
+import 'package:drive_scope/obd_protocol.dart';
 
 void main() {
   test('يفك RPM من رد ELM327', () {

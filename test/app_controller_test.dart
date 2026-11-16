@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:DriveScope/controllers/app_controller.dart';
+import 'package:drive_scope/controllers/app_controller.dart';
+import 'package:drive_scope/obd_protocol.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -28,47 +29,35 @@ void main() {
     expect(second.themeMode, ThemeMode.light);
   });
 
-  group('التوجيه المباشر لرد قراءة الأعطال (بلا parseDtc)', () {
-    test('يقسّم رد الجهاز النصي إلى عناصر المصفوفة كما هي', () {
-      // الرد الفعلي الذي ترسله المركبة — يوجّه للباك إند مباشرة.
+  group('فكّ رد قراءة الأعطال عبر parseDtc قبل الإرسال للباك إند', () {
+    test('الصيغة النصية الحرفية تُفك إلى أكواد صحيحة', () {
+      // بعض الجسور ترسل الأكواد نصاً — parseDtc يلتقطها نصياً.
       expect(
-        AppController.splitDtcTokens('P0128, P0420, P0430'),
+        ObdParser.parseDtc('P0128, P0420, P0430'),
+        ['P0128', 'P0420', 'P0430'],
+      );
+      expect(
+        ObdParser.parseDtc('p0128 p0420\r\np0430'),
+        ['P0128', 'P0420', 'P0430'],
+      );
+      expect(
+        ObdParser.parseDtc('P0128;P0420;P0430'),
         ['P0128', 'P0420', 'P0430'],
       );
     });
 
-    test('يقبل أي فاصل (فاصلة/فاصلة منقوطة/مسافة/سطر) والحروف الصغيرة', () {
+    test('الصيغة البايتية القياسية "43 <عدد> <أزواج>" تُفك إلى أكواد', () {
+      // الرد الفعلي لفيرموير Freematics المُرقّع — يجب أن يظهر في
+      // التطبيق أكواد P/C/B/U (لا رموز خام مثل "43"/"02" تُرسل
+      // إلى خدمة التحليل فتفشل في مخططها).
       expect(
-        AppController.splitDtcTokens('p0128 p0420\r\np0430'),
-        ['P0128', 'P0420', 'P0430'],
+        ObdParser.parseDtc('43 03 30 00 40 40 07 03\r'),
+        ['P3000', 'C0040', 'P0703'],
       );
       expect(
-        AppController.splitDtcTokens('P0128;P0420;P0430'),
-        ['P0128', 'P0420', 'P0430'],
+        ObdParser.parseDtc('43 02 01 08 01 09\r'),
+        ['P0108', 'P0109'],
       );
-      expect(
-        AppController.splitDtcTokens('P0128,P0420,P0430'),
-        ['P0128', 'P0420', 'P0430'],
-      );
-    });
-
-    test('لا يفكّ البايتات ولا يتحقق من الصيغة — يوجّه العناصر كما وصلت',
-        () {
-      // إثبات عدم المرور على parseDtc: بايتات mode-03 لا تُحوَّل إلى
-      // أكواد P/C/B/U، بل تبقى عناصر خام توجّه كما هي.
-      expect(
-        AppController.splitDtcTokens('43 03 30 00 40 40 07 03'),
-        ['43', '03', '30', '00', '40', '40', '07', '03'],
-      );
-    });
-
-    test('يتجاهل الفراغات والعناصر الفارغة', () {
-      expect(
-        AppController.splitDtcTokens('  P0128 ,  , P0420  '),
-        ['P0128', 'P0420'],
-      );
-      expect(AppController.splitDtcTokens(''), isEmpty);
-      expect(AppController.splitDtcTokens('   \r\n '), isEmpty);
     });
   });
 }

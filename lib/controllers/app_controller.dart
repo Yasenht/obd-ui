@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,6 +11,7 @@ import '../models/dtc_analysis.dart';
 import '../obd_analysis_api.dart';
 import '../obd_protocol.dart';
 import '../services/dtc_analysis_service.dart';
+import '../services/report_service.dart';
 import '../services/vehicle_catalog.dart';
 
 /// الحالة المشتركة للتطبيق: الاتصال، الفحص، البيانات الحية،
@@ -27,6 +29,7 @@ class AppController extends ChangeNotifier {
   StreamSubscription<List<DiscoveredObdDevice>>? _scanSubscription;
   StreamSubscription<ObdConnectionStatus>? _statusSubscription;
   StreamSubscription<String>? _debugLogSubscription;
+  Timer? _debugNotifyTimer;
 
   // ---- وضع العرض (فاتح/داكن/النظام) — محفوظ محلياً ----
   static const String _themekey = 'app_theme_mode_v1';
@@ -136,6 +139,12 @@ class AppController extends ChangeNotifier {
       _vehicleMake = make;
       _vehicleModel = null;
       _vehicleYear = year;
+    } else if (make != null) {
+      // اختيار ماركة فقط (بلا موديل/سنة) كان محفوظاً — يُستعاد كما هو
+      // بدل فقدانه كلياً عند إقلاع جديد.
+      _vehicleMake = make;
+      _vehicleModel = null;
+      _vehicleYear = null;
     }
     notifyListeners();
   }
@@ -203,6 +212,25 @@ class AppController extends ChangeNotifier {
   bool _hasReadDtc = false;
   bool get hasReadDtc => _hasReadDtc;
 
+  // ---- تقرير التشخيص (PDF) ----
+  // أكواد إطار التجميد من آخر قراءة ناجحة لأمر "02" (إن وُجدت).
+  List<String> _freezeFrameCodes = <String>[];
+  List<String> get freezeFrameCodes => List.unmodifiable(_freezeFrameCodes);
+
+  // آخر حالة MIL/جاهزية I/M مقروءة من "0101" (تحديث لطيف بعد كل فحص).
+  MilStatus? _lastMilStatus;
+  MilStatus? get lastMilStatus => _lastMilStatus;
+
+  // طابع زمني لآخر فحص DTC ناجح (لمصدر "تاريخ الفحص" في التقرير).
+  DateTime? _lastScanCompletedAt;
+  DateTime? get lastScanCompletedAt => _lastScanCompletedAt;
+
+  bool _reportGenerating = false;
+  bool get reportGenerating => _reportGenerating;
+
+  String? _reportError;
+  String? get reportError => _reportError;
+
   // ---- تحليل أكواد الأعطال عبر /api/analyze/dtc ----
   DtcAnalysisResult? _dtcAnalysis;
   DtcAnalysisResult? get dtcAnalysis => _dtcAnalysis;
@@ -210,12 +238,18 @@ class AppController extends ChangeNotifier {
   bool _dtcAnalysisLoading = false;
   bool get dtcAnalysisLoading => _dtcAnalysisLoading;
 
+  // مهمة التحليل الجارية حالياً — ينتظرها توليد التقرير
+  // لضمان إدراج نتيجة الخادم في المستند.
+  Future<void>? _dtcAnalysisJob;
+
   String? _dtcAnalysisError;
   String? get dtcAnalysisError => _dtcAnalysisError;
 
-  /// وقت آخر فحص ناجح لأكواد الأعطال.
+  /// وقت آخر فحص ناجح لأكواد الأعطال (وضع 03 أو إطار التجميد).
+  /// المطابقة على بادئة العنوان "قراءة أكواد" كي لا تُحتسب عمليات
+  /// المسح (عناوينها "مسح أكواد ...") ولا الأوامر اليدوية كفحوصات.
   DateTime? get lastDtcScanTime => _history
-      .where((r) => r.title.contains('أكواد الأعطال') && r.success)
+      .where((r) => r.title.contains('قراءة أكواد') && r.success)
       .map((r) => r.createdAt)
       .fold<DateTime?>(null, (a, b) => a == null ? b : (b.isAfter(a) ? b : a));
 
@@ -346,7 +380,13 @@ class AppController extends ChangeNotifier {
       if (_debugLogs.length > 200) {
         _debugLogs.removeAt(0);
       }
-      notifyListeners();
+      // تجميع الإشعارات: كل رسالة سجل BLE (واردة بغزارة أثناء كل رد)
+      // لا تستدعي إعادة بناء كامل للتطبيق — تُجمَّع الرسائل خلال نافذة
+      // قصيرة في إشعار واحد.
+      _debugNotifyTimer ??= Timer(const Duration(milliseconds: 300), () {
+        _debugNotifyTimer = null;
+        notifyListeners();
+      });
     });
 
     unawaited(_requestRequiredPermissions());
@@ -366,6 +406,7 @@ class AppController extends ChangeNotifier {
     _scanSubscription?.cancel();
     _statusSubscription?.cancel();
     _debugLogSubscription?.cancel();
+    _debugNotifyTimer?.cancel();
     _liveTimer?.cancel();
     bleService.dispose();
     super.dispose();
@@ -452,6 +493,18 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return null;
     }
+
+    // إرسال أمر BLE أحادي (لا يتزامن مع غيره) — انتظر انتهاء دورة
+    // القراءة الحية أو قراءة تعديل الوقود كي لا يفشل أمر المستخدم
+    // بخطأ "يوجد أمر آخر قيد التنفيذ". _liveTick/readFuelTrims يفحصان
+    // _busy فيتوقفا أثناء هذا الأمر، فلا يوجد حلقة انتظار إلا هنا.
+    var waited = Duration.zero;
+    while ((_liveFetching || _fuelTrimReading) &&
+        waited < const Duration(seconds: 15)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      waited += const Duration(milliseconds: 100);
+    }
+
     _busy = true;
     _error = null;
     notifyListeners();
@@ -502,15 +555,22 @@ class AppController extends ChangeNotifier {
       return;
     }
 
-    final apiResponse = ObdParser.toRawObdResponse(apiCommand, cleanedResponse);
-    log('API SEND: command=$apiCommand response=$apiResponse');
-
-    if (apiCommand.isEmpty ||
-        apiCommand.startsWith('AT') ||
-        apiResponse.isEmpty ||
-        ObdParser.isError(response)) {
+    // أوامر الإعداد (AT...) بلا صيغة تحليل — تُستبعد قبل أي ترميز.
+    if (apiCommand.isEmpty || apiCommand.startsWith('AT')) {
       return;
     }
+
+    final apiResponse = ObdParser.toRawObdResponse(apiCommand, cleanedResponse);
+
+    // رد فارغ أو خطأ من الجهاز: لا يُرسل شيء لخدمة التحليل (الترميز
+    // نفسه يجري هنا لتسجيل ما سيُرسل فعلاً في سجل "API SEND").
+    if (apiResponse.isEmpty || ObdParser.isError(response)) {
+      log('API SKIP: command=$apiCommand '
+          'reason=${apiResponse.isEmpty ? 'بلا صيغة ترميز' : 'رد خطأ'}');
+      return;
+    }
+
+    log('API SEND: command=$apiCommand response=$apiResponse');
 
     _apiLoading = true;
     _apiError = null;
@@ -610,20 +670,16 @@ class AppController extends ChangeNotifier {
     }
   }
  
-  static List<String> splitDtcTokens(String response) {
-    return response
-        .split(RegExp(r'[,;\s]+'))
-        .map((token) => token.trim().toUpperCase())
-        .where((token) => token.isNotEmpty)
-        .toList();
-  }
-
   /// قراءة أكواد الأعطال بأمر "03" القياسي ثم "DTCS?" (فيرموير مرقّع).
   /// يعيد الرد الخام عند النجاح (للعرض في ورقة النتيجة) أو null.
   ///
-  /// الرد نفسه لا يُفكّ محلياً إطلاقاً: يُوجّه مباشرةً إلى الباك إند
-  /// عبر [analyzeDtcCodes] بعد تقسيمه إلى عناصر فقط — فلا اشتراط
-  /// لصيغة "43 ..." البايتية، ويكفي رد نصي مثل "P0128, P0420, P0430".
+  /// الرد يُفكّ محلياً بـ [ObdParser.parseDtc] قبل أي عرض أو إرسال:
+  /// الفيرموير المُرقّع يرد بصيغة بايتية قياسية "43 <عدد> <أزواج>"
+  /// (مثال: "43 02 01 08 01 09" → P0108، P0109)، وأي جسر ELM قد يرد
+  /// نصاً حرفياً ("P0128, P0420") — parseDtc يدعم الصيغتين معاً.
+  /// تُرسَل الأكواد المفكوكة فقط إلى `POST /api/analyze/dtc` (لا الرموز
+  /// الخام مثل "43"/"02" التي تفشل في مخطط خدمة التحليل) — على نمط
+  /// [readDtcFreezeFrame] أدناه.
   Future<String?> readDtc() async {
     
     final stopwatch = Stopwatch()..start();
@@ -653,12 +709,11 @@ class AppController extends ChangeNotifier {
 
     var response = await attempt('03', ObdCommands.readDtc);
 
-   
     var codes = response == null
         ? const <String>[]
-        : splitDtcTokens(response);
+        : ObdParser.parseDtc(response);
 
-    
+
     if (response == null || ObdParser.isError(response)) {
       if (response != null) {
         log('DTC FLOW: رد "03" = "${response.trim()}" خطأ — إعادة '
@@ -667,7 +722,7 @@ class AppController extends ChangeNotifier {
         log('لا رد على "03"؛ إعادة المحاولة بأمر "DTCS?" (فيرموير مرقّع).');
       }
       response = await attempt('DTCS?', ObdCommands.readDtcCached);
-      codes = response == null ? const <String>[] : splitDtcTokens(response);
+      codes = response == null ? const <String>[] : ObdParser.parseDtc(response);
     }
 
     if (response == null) {
@@ -694,15 +749,16 @@ class AppController extends ChangeNotifier {
       return null;
     }
 
-    // توجيه مباشر: نص الرد كما وصل من الجهاز (مثل "P0128, P0420,
-    // P0430" أو بأي صيغة أخرى) يُقسّم على الفواصل/المسافات فقط —
-    // بلا فك أو تحقق محلي (لا parseDtc) — وتُرسل العناصر كلها إلى
-    // `POST /api/analyze/dtc` لعرض تفاصيل كل عطل من استجابة الخدمة
-    // في شاشة الأعطال. (التسوية: uppercase/إزالة التكرار/الحد 100
-    // تجري داخل DtcAnalysisService حصراً وفق قيود المخطط.)
-    log('DTC FLOW: توجيه مباشر للرد الخام — العناصر: $codes؛ '
-        'إرسالها إلى /api/analyze/dtc دون فك محلي');
+    // فكّ محلي ثم توجيه: الأكواد المفكوكة (P/C/B/U...) تُعرض في شاشة
+    // الأعطال وتُرسل إلى `POST /api/analyze/dtc` — لا تُرسل الرموز
+    // الخام مثل "43"/"02" لأنها تفشل في مخطط خدمة التحليل.
+    log('DTC FLOW: أكواد مفكوكة محلياً بـ parseDtc: $codes؛ '
+        'إرسالها إلى /api/analyze/dtc');
     log('DTC FLOW: ================= <end: نجاح> ==================');
+
+    // بيانات التقرير: طابع زمني للفحص + تحديث لطيف لحالة MIL/I-M.
+    _lastScanCompletedAt = DateTime.now();
+    unawaited(_refreshMilStatus());
 
     _dtcCodes = codes;
     _hasReadDtc = true;
@@ -723,7 +779,7 @@ class AppController extends ChangeNotifier {
   /// (مثال كودين: "42 02 01 08 01 09" → P0108، P0109). الرد بايتي،
   /// لذا يُفك محلياً بـ [ObdParser.parseDtc] أولاً ثم تُرسل الأكواد
   /// المفكوكة (لا الرموز الخام مثل "42"/"02") إلى خدمة التحليل —
-  /// على خلاف [readDtc] الذي يمرّر نص الرد كما وصل.
+  /// نفس منهجية [readDtc].
   Future<String?> readDtcFreezeFrame() async {
     final stopwatch = Stopwatch()..start();
     log('DTC FLOW (02): ================= <start> =================');
@@ -762,13 +818,16 @@ class AppController extends ChangeNotifier {
     log('DTC FLOW (02): أكواد مفكوكة محلياً: $codes');
 
     _dtcCodes = codes;
+    _freezeFrameCodes = codes;
     _hasReadDtc = true;
+    _lastScanCompletedAt = DateTime.now();
     _error = null;
     notifyListeners();
 
     // لا نحظر عرض الأكواد المحلية بانتظار التحليل؛ الشاشة تعرض
     // حالة "جارٍ التحليل" ثم تُحدَّث تلقائياً عند وصول الاستجابة.
     unawaited(analyzeDtcCodes(codes));
+    unawaited(_refreshMilStatus());
     log('DTC FLOW (02): ================= <end: نجاح> ==================');
     return response;
   }
@@ -776,7 +835,7 @@ class AppController extends ChangeNotifier {
   
   Future<String?> clearFaultCodes() async {
     final response = await executeCommand(
-      'مسح أكواد الأعطال (04)',
+      'مسح أكواد الأعطال (DTCCLR)',
       ObdCommands.clearDtc,
     );
     if (response == null) return null;
@@ -790,19 +849,157 @@ class AppController extends ChangeNotifier {
     }
 
     // المسح نجح: القائمة المحلية (آخر قراءة) لم تعد تعبّر عن الوحدة.
+    // ملاحظة: الفيرموير ينفّذ المسح فعلياً في process() بعد جاهزية OBD،
+    // لذا يُنصح بقراءة الأكواد من جديد للتحقق من النتيجة.
     _dtcCodes = <String>[];
+    _freezeFrameCodes = <String>[];
     _hasReadDtc = true;
     _resetDtcAnalysis();
     _error = null;
     notifyListeners();
-    log('DTC CLEAR: الأمر "04" نُفّذ — ذاكرة الأكواد مُمسحة');
+    log('DTC CLEAR: الأمر "DTCCLR" نُفّذ — ذاكرة الأكواد مُمسحة');
     return response;
   }
 
+  /// تحديث حالة MIL/جاهزية I/M من أمر "0101" — بلا إزعاج:
+  /// أي فشل (لا رد/خطأ/مهلة) يُهمل بصمت لأنها بيانات مكمّلة
+  /// للفحص ولا تمنع نتيجة الأكواد.
+  Future<void> _refreshMilStatus() async {
+    try {
+      final response = await bleService.sendCommand(
+        ObdCommands.readMil,
+        timeout: const Duration(seconds: 5),
+      );
+      if (ObdParser.isError(response)) return;
+      final status = ObdParser.parseMilStatus(response);
+      if (status != null) {
+        _lastMilStatus = status;
+        log('REPORT: تحديث MIL — ${status.milOn ? 'مضاء' : 'مطفأ'}، '
+            'أكواد: ${status.dtcCount}، غير مكتمل: '
+            '${status.incompleteTests.length}');
+        notifyListeners();
+      }
+    } catch (error) {
+      log('REPORT: فشل قراءة MIL/I-M (مُهمَل): $error');
+    }
+  }
+
+  /// لقطة البيانات الحية لحظة بناء التقرير (المتاح منها فقط):
+  /// RPM/السرعة/حرارة التبريد/جهد البطارية وتعديلا الوقود.
+  Map<String, String> _liveMetricsSnapshot() {
+    final snapshot = <String, String>{};
+    String? fmt(String label, num? value, String unit) {
+      if (value == null) return null;
+      final formatted = value is double && value == value.roundToDouble()
+          ? value.round().toString()
+          : value.toStringAsFixed(value is double ? 1 : 0);
+      return '$label: $formatted $unit';
+    }
+
+    for (final line in <String?>[
+      fmt('دورات المحرك', _liveRpm, 'RPM'),
+      fmt('السرعة', _liveSpeed, 'km/h'),
+      fmt('حرارة سائل التبريد', _liveCoolant, '°C'),
+      fmt('جهد البطارية', _liveBattery, 'V'),
+      fmt('تعديل وقود قصير المدى (STFT)', _liveStft, '%'),
+      fmt('تعديل وقود طويل المدى (LTFT)', _liveLtft, '%'),
+    ]) {
+      if (line != null) snapshot[line.split(': ')[0]] = line.split(': ')[1];
+    }
+    return snapshot;
+  }
+
+  /// بناء بيانات تقرير التشخيص من آخر فحص فعلي.
+  ///
+  /// يعيد null إذا لم يُجرَ فحص بعد (لا توجد قراءة DTC سابقة).
+  DiagnosticReportData? buildReportData() {
+    if (!_hasReadDtc) return null;
+
+    return DiagnosticReportData(
+      vehicleLabel: vehicleLabel,
+      vin: _vin,
+      scannedAt: _lastScanCompletedAt ?? DateTime.now(),
+      dtcCodes: _dtcCodes,
+      freezeFrameCodes: _freezeFrameCodes,
+      milStatus: _lastMilStatus,
+      liveMetrics: _liveMetricsSnapshot(),
+      analysis: _dtcAnalysis,
+    );
+  }
+
+  /// توليد تقرير التشخيص PDF من آخر فحص فعلي وإقسامه.
+  ///
+  /// يعيد بايتات PDF عند النجاح (تُشارَك/تُحفَظ من الواجهة)،
+  /// وnull عند غياب فحص سابق (بضبط [_reportError] برسالة عربية).
+  ///
+  /// قبل البناء يضمن وجود نتيجة تحليل الأعطال القادمة من
+  /// `POST /api/analyze/dtc`: إن كان التحليل جارياً ننتظر
+  /// انتهاءه، وإما نشغّله الآن وننتظره — فلا يُبنى المستند
+  /// أبداً قبل وصول استجابة الخادم (أو فشلها الواضح).
+  Future<Uint8List?> generateReportPdf() async {
+    if (_reportGenerating) return null;
+    if (!_hasReadDtc) {
+      _reportError = 'لا يوجد فحص سابق — نفّذ فحص أكواد الأعطال أولاً '
+          'لإنشاء التقرير.';
+      notifyListeners();
+      return null;
+    }
+
+    _reportGenerating = true;
+    _reportError = null;
+    notifyListeners();
+    try {
+      if (_dtcCodes.isNotEmpty && _dtcAnalysis == null) {
+        final job = _dtcAnalysisJob;
+        if (job != null) {
+          log('REPORT: انتظار تحليل جارٍ للأكواد قبل بناء التقرير...');
+          await job;
+        } else {
+          log('REPORT: لا نتيجة تحليل بعد — إرسال الأكواد إلى '
+              '/api/analyze/dtc قبل بناء التقرير...');
+          await analyzeDtcCodes(_dtcCodes);
+        }
+        log('REPORT: نتيجة التحليل عند بناء التقرير: '
+            '${_dtcAnalysis != null ? 'وصلت' : 'لم تصل (${_dtcAnalysisError ?? 'بلا رسالة'})'}');
+      }
+
+      final data = buildReportData();
+      if (data == null) {
+        _reportError = 'لا توجد بيانات فحص لبناء التقرير.';
+        notifyListeners();
+        return null;
+      }
+      final bytes = await DiagnosticReportService().build(data);
+      log('REPORT: تقرير PDF جاهز (${bytes.length} بايت)');
+      return bytes;
+    } catch (error) {
+      _reportError = 'تعذر توليد تقرير PDF: $error';
+      log('REPORT: فشل التوليد: $error');
+      return null;
+    } finally {
+      _reportGenerating = false;
+      notifyListeners();
+    }
+  }
+
   /// إرسال أكواد الأعطال المستخرجة من رد الجهاز إلى خدمة التحليل.
-  /// [codes] هي عناصر الرد الخام بعد تقسيمها فقط (توجيه مباشر بلا فك
-  /// محلي؛ قد تكون فارغة، وحينها تعيد الخدمة حالة "السيارة سليمة").
+  /// الأكواد المستخرجة من رد الجهاز بعد فكّها بـ [ObdParser.parseDtc]
+  /// (لا الرموز الخام). قد تكون فارغة، وحينها تعيد الخدمة حالة
+  /// "السيارة سليمة".
+  ///
+  /// تُسجَّل المهمة الجارية في [_dtcAnalysisJob] ليمكن للتقرير
+  /// انتظار انتهائها.
   Future<void> analyzeDtcCodes(List<String> codes) async {
+    final job = _runDtcAnalysis(codes);
+    _dtcAnalysisJob = job;
+    try {
+      await job;
+    } finally {
+      if (identical(_dtcAnalysisJob, job)) _dtcAnalysisJob = null;
+    }
+  }
+
+  Future<void> _runDtcAnalysis(List<String> codes) async {
     _dtcAnalysisLoading = true;
     _dtcAnalysisError = null;
     notifyListeners();
@@ -914,8 +1111,14 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _liveTick() async {
-  
-    if (!_connected || _busy || _liveFetching || vehicleUnsupported) return;
+   
+    if (!_connected ||
+        _busy ||
+        _liveFetching ||
+        _fuelTrimReading ||
+        vehicleUnsupported) {
+      return;
+    }
     _liveFetching = true;
     notifyListeners();
     try {
@@ -961,7 +1164,13 @@ class AppController extends ChangeNotifier {
 
   Future<void> readFuelTrims() async {
 
-    if (!_connected || _busy || _fuelTrimReading || vehicleUnsupported) return;
+    if (!_connected ||
+        _busy ||
+        _liveFetching ||
+        _fuelTrimReading ||
+        vehicleUnsupported) {
+      return;
+    }
     _fuelTrimReading = true;
     notifyListeners();
     try {

@@ -208,9 +208,13 @@ class _RecordTile extends StatelessWidget {
 
   bool get _isDtcScan => record.title.contains('أكواد الأعطال');
 
-  /// هل الرد المسجل رد وضع 03 صالح (يحتوي علامة 43)؟
+  /// هل الرد المسجل نتيجة فحص نهائية؟ إما رد وضع 03 بايتي يحمل علامة
+  /// "43" (أو "42" لوضع 02)، أو أكواد نصية حرفية فكّها المحلل (بعض
+  /// الجسور ترسل "P0128, P0420" بلا علامة 43 إطلاقاً).
   bool get _scanConclusive =>
-      record.success && RegExp(r'\b43\b').hasMatch(record.rawResponse);
+      record.success &&
+      (RegExp(r'\b4[23]\b').hasMatch(record.rawResponse) ||
+          ObdParser.parseDtc(record.rawResponse).isNotEmpty);
 
   /// أكواد الأعطال الموجودة فعلاً في الرد المسجل — عبر نفس محلل الجهاز.
   List<String> get faultCodes {
@@ -271,7 +275,7 @@ class _RecordTile extends StatelessWidget {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: palette.onPrimary.withOpacity(0.10),
+                      color: palette.onPrimary.withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Row(
